@@ -164,7 +164,7 @@ const DB=CLOUD?CloudStore:LocalStore;
 ============================================================ */
 const S={user:null,fecha:today(),prods:new Map(),day:{dia:null,movs:[],cierres:[]},prev:null,hist:null,tab:'captura',q:'',cat:'Todas',vista:'usados',draft:{},cierreEdit:{},busy:false,avisos:new Map(),
   an:{desde:null,hasta:null,data:null},ex:{desde:null,hasta:null}};
-const ROLES={admin:['captura','cierre','analisis','control','catalogo','exportar'],cocina:['captura','cierre'],chef:['captura','cierre','analisis','control'],lectura:['analisis','control'],ventas:['analisis']};
+const ROLES={admin:['captura','cierre','analisis','control','catalogo','exportar'],cocina:['captura','cierre','analisis','control'],chef:['captura','cierre','analisis','control'],lectura:['analisis','control'],ventas:['analisis']};
 const isClosed=()=>S.day.dia&&S.day.dia.estado==='cerrado';
 const isAdmin=()=>!!(S.user&&S.user.rol==='admin');
 const canWrite=()=>S.user&&['admin','cocina','chef'].includes(S.user.rol)&&(!isClosed()||isAdmin());
