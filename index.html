@@ -337,12 +337,25 @@ async function saveC(code,A,M,reut,r){
 }
 
 /* ---------- ANÁLISIS ---------- */
+// ---------- ANÁLISIS ----------
+const CAT_COL=['#0f2747','#b8934f','#2f7d6b','#c2563a','#5b6fb5','#8a5a9e','#3a9bb5','#9aa33b','#6b7686'];
+const addDays=(f,n)=>{const d=new Date(f+'T12:00:00');d.setDate(d.getDate()+n);return isoDate(d);};
+const diffDays=(a,b)=>Math.round((new Date(b+'T12:00:00')-new Date(a+'T12:00:00'))/864e5);
+const ddmm=f=>f.slice(5).split('-').reverse().join('/');
+const uk=u=>{const k=String(u||'').trim().toUpperCase();return k==='EA'?'UT':k==='L'?'LTR':k;};
+const ucap=(u,n)=>{const s=ulp(u,n);return s.charAt(0).toUpperCase()+s.slice(1);};
+
 async function loadAnalisis(){
-  if(!S.an.desde){const d=new Date();d.setDate(d.getDate()-30);S.an.desde=isoDate(d);S.an.hasta=today();}
+  S.an=Object.assign({cmp:'none',fam:'Todas',met:'eur',vw:'tot',uni:null,art:null,nrk:10,cdesde:null,chasta:null,cdata:null},S.an);
+  if(!S.an.desde){S.an.desde=addDays(today(),-30);S.an.hasta=today();}
+  let cd=null;
+  if(S.an.cmp==='prev'){const n=diffDays(S.an.desde,S.an.hasta)+1;S.an.chasta=addDays(S.an.desde,-1);S.an.cdesde=addDays(S.an.desde,-n);}
+  if(S.an.cmp!=='none'&&S.an.cdesde&&S.an.chasta)cd=await DB.getRango(S.an.cdesde,S.an.chasta);
+  S.an.cdata=cd;
   S.an.data=await DB.getRango(S.an.desde,S.an.hasta);
 }
 function periodo(data){
-  const dias=data.dias.filter(d=>d.pax>0&&(data.movs.some(m=>m.fecha===d.fecha&&!m.anulado))).sort((a,b)=>a.fecha.localeCompare(b.fecha));const out=[];
+  const dias=data.dias.filter(d=>d.pax>0&&data.movs.some(m=>m.fecha===d.fecha&&!m.anulado)).sort((a,b)=>a.fecha.localeCompare(b.fecha));const out=[];
   for(const d of dias){
     const mv=data.movs.filter(m=>m.fecha===d.fecha),ci=data.cierres.filter(c=>c.fecha===d.fecha);
     const map=agg(mv,ci,S.prods);const t=totales(map);
@@ -350,29 +363,127 @@ function periodo(data){
   }
   return out;
 }
+function analiza(data){
+  const P=periodo(data),pc=new Map(),fam=new Map();
+  for(const d of P)for(const r of d.map.values()){
+    const cat=(r.p&&r.p.categoria)||'Otros',val=r.consumo*r.cu;
+    let o=pc.get(r.codigo);if(!o){o={codigo:r.codigo,p:r.p,cat,uni:(r.p&&r.p.unidad_conteo)||'',cons:0,eur:0,mer:0,merE:0,per:[]};pc.set(r.codigo,o);}
+    o.cons+=r.consumo;o.eur+=val;o.mer+=r.M;o.merE+=r.M*r.cu;o.per.push({f:d.fecha,pax:d.pax,v:r.consumo,cu:r.cu});
+    let g=fam.get(cat);if(!g){g={cat,eur:0,merE:0,arts:new Set(),byDay:new Map()};fam.set(cat,g);}
+    g.eur+=val;g.merE+=r.M*r.cu;g.arts.add(r.codigo);g.byDay.set(d.fecha,(g.byDay.get(d.fecha)||0)+val);
+  }
+  const totC=P.reduce((a,x)=>a+x.consumo,0),totPax=P.reduce((a,x)=>a+x.pax,0),totM=P.reduce((a,x)=>a+x.merma,0),totB=P.reduce((a,x)=>a+x.bruto,0);
+  const fams=[...fam.values()].sort((a,b)=>b.eur-a.eur);
+  return {P,pc,fam,fams,totC,totPax,totM,totB,cpax:totPax?totC/totPax:0};
+}
+const dpct=(a,b)=>b?(a-b)/Math.abs(b)*100:null;
+function dl(a,b,good){
+  const p=dpct(a,b);if(p==null)return '';
+  if(Math.abs(p)<0.05)return '<small class="dl">= 0 %</small>';
+  const up=p>0,bad=good==='down'?up:good==='up'?!up:null;
+  return `<small class="dl ${bad==null?'':bad?'bad':'ok'}">${up?'▲':'▼'} ${nf(Math.abs(p),1)} %</small>`;
+}
+function chartBars(labels,series,fmt,sub){
+  const n=labels.length,k=series.length,bw=k>1?22:36,gw=bw*k+14,W=Math.max(n*gw+16,300),H=205,T=26,base=165;
+  const mx=Math.max(1e-9,...series.flatMap(s=>s.vals.filter(v=>v!=null&&v>0)));
+  let o=`<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:${W}px;height:${H}px">`;
+  labels.forEach((l,i)=>{const x0=8+i*gw+7;
+    series.forEach((s,j)=>{const v=s.vals[i];if(v==null)return;const h=v>0?Math.max(v/mx*(base-T),2):0,x=x0+j*bw;
+      o+=`<rect x="${x}" y="${base-h}" width="${bw-3}" height="${h}" rx="3" fill="${s.color}"/><text x="${x+(bw-3)/2}" y="${base-h-4}" font-size="${k>1?8:10}" text-anchor="middle" fill="#17202e">${fmt(v)}</text>`;});
+    o+=`<text x="${x0+(k*bw-3)/2}" y="${base+14}" font-size="10" text-anchor="middle" fill="#6b7686">${l}</text>`;
+    if(sub&&sub[i])o+=`<text x="${x0+(k*bw-3)/2}" y="${base+26}" font-size="8" text-anchor="middle" fill="#9aa3b0">${sub[i]}</text>`;});
+  return o+'</svg></div>';
+}
+function chartStack(labels,stacks,keys,colorOf,fmt){
+  const n=labels.length,bw=40,gw=bw+16,W=Math.max(n*gw+16,300),H=205,T=26,base=165;
+  const tots=stacks.map(s=>Object.values(s).reduce((a,v)=>a+v,0)),mx=Math.max(1e-9,...tots);
+  let o=`<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" style="width:100%;min-width:${W}px;height:${H}px">`;
+  labels.forEach((l,i)=>{const x=8+i*gw+8;let y=base;
+    for(const k of keys){const v=stacks[i][k]||0;if(v<=0)continue;const h=v/mx*(base-T);y-=h;o+=`<rect x="${x}" y="${y}" width="${bw}" height="${h}" fill="${colorOf(k)}"/>`;}
+    o+=`<text x="${x+bw/2}" y="${y-4}" font-size="10" text-anchor="middle" fill="#17202e">${fmt(tots[i])}</text><text x="${x+bw/2}" y="${base+14}" font-size="10" text-anchor="middle" fill="#6b7686">${l}</text>`;});
+  return o+'</svg></div>';
+}
+function rankRows(A,B,metric,filt,n,total){
+  const key=o=>metric==='eur'?o.eur:o.cons;
+  const list=[...A.pc.values()].filter(filt).filter(o=>key(o)>0).sort((a,b)=>key(b)-key(a));
+  let pr=null,pv=null;
+  if(B){const pl=[...B.pc.values()].filter(filt).filter(o=>key(o)>0).sort((a,b)=>key(b)-key(a));pr=new Map(pl.map((o,i)=>[o.codigo,i+1]));pv=new Map(pl.map(o=>[o.codigo,key(o)]));}
+  const mx=Math.max(1e-9,...list.slice(0,n).map(key));
+  return list.slice(0,n).map((o,i)=>{
+    const v=key(o),val=metric==='eur'?eur(v):`${q3(v)} ${ulp(o.uni,v)}`;
+    const sub=metric==='eur'?`${nf(total?v/total*100:0,1)} % · ${nf(A.totPax?v/A.totPax:0,2)} €/pax`:`${nf(A.totPax?v/A.totPax:0,3)} /pax`;
+    let cmpH='';
+    if(B){const r0=pr.get(o.codigo),v0=pv.get(o.codigo);
+      if(r0==null)cmpH='<small class="dl">nuevo en el top</small>';
+      else{const mv=r0-(i+1),pv0=metric==='eur'?eur(v0):`${q3(v0)} ${ulp(o.uni,v0)}`;
+        cmpH=`<small class="dl">ant. ${pv0}</small> ${dl(v,v0,metric==='eur'?'down':'none')} <small class="dl ${mv>0?'ok':mv<0?'bad':''}">${mv>0?'↑'+mv:mv<0?'↓'+(-mv):'='} (#${r0})</small>`;}}
+    return `<div class="rk" data-act="anart" data-c="${esc(o.codigo)}"><span class="rn">${i+1}</span><div class="grow"><b>${esc(o.p?o.p.descripcion:o.codigo)}</b><div class="bar"><i style="width:${v/mx*100}%"></i></div><small class="muted">${esc(o.cat)}</small></div><div class="rv"><b>${val}</b><small class="muted">${sub}</small>${cmpH?'<div>'+cmpH+'</div>':''}</div></div>`;
+  }).join('')||'<div class="muted">Sin datos para este filtro.</div>';
+}
 function vAnalisis(){
   if(!S.an.data){loadAnalisis().then(render).catch(e=>toast(e.message,true));return '<div class="card muted">Cargando…</div>';}
-  const P=periodo(S.an.data);
-  const totC=P.reduce((a,x)=>a+x.consumo,0),totPax=P.reduce((a,x)=>a+x.pax,0),totM=P.reduce((a,x)=>a+x.merma,0),totB=P.reduce((a,x)=>a+x.bruto,0);
-  const simple=P.length?P.reduce((a,x)=>a+x.cpax,0)/P.length:0;
-  const verProd=S.user.rol!=='ventas';
-  // productos
-  const pc=new Map();for(const d of P)for(const r of d.map.values()){const k=r.codigo;const o=pc.get(k)||{p:r.p,cons:0,eur:0,mer:0,merE:0,per:[]};o.cons+=r.consumo;o.eur+=r.consumo*r.cu;o.mer+=r.M;o.merE+=r.M*r.cu;o.per.push({f:d.fecha,pax:d.pax,v:r.consumo,cu:r.cu});pc.set(k,o);}
-  const prods=[...pc.values()];
-  const topC=[...prods].sort((a,b)=>b.eur-a.eur).slice(0,10),topM=[...prods].filter(x=>x.merE>0).sort((a,b)=>b.merE-a.merE).slice(0,8);
+  const an=S.an,A=analiza(an.data),B=an.cdata?analiza(an.cdata):null,verProd=S.user.rol!=='ventas';
+  const css=`<style>.dl{font-size:11px;color:var(--mut)}.dl.ok{color:#1f8a5b}.dl.bad{color:#c0392b}.kpi small{display:block;margin-top:2px}.bar{height:7px;background:#eef1f6;border-radius:5px;margin:4px 0 2px;overflow:hidden}.bar i{display:block;height:100%;background:var(--navy);border-radius:5px}.bar i.cb{background:#b9c2d0;margin-top:2px;height:4px}.fam{padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer}.fam.on{background:#f3ecdc}.fr{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:3px;display:inline-block}.rk{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line);cursor:pointer}.rn{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}.rv{text-align:right;min-width:110px}.rv b{display:block}.scrollx{overflow-x:auto}.scrollx table{min-width:520px}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:4px}</style>`;
+  const chip=(act,attr,val,label,on)=>`<button class="chip ${on?'on':''}" data-act="${act}" data-${attr}="${esc(val)}">${label}</button>`;
+  const ctrl=`<div class="card"><div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="an_d" value="${an.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="an_h" value="${an.hasta}"></div></div>
+  <div class="chips" style="margin-top:8px">${[['7','Últimos 7 días'],['30','Últimos 30 días'],['mes','Este mes'],['mesant','Mes anterior'],['todo','Todo']].map(x=>chip('anq','q',x[0],x[1],false)).join('')}</div>
+  <label class="f">Comparar con</label><div class="chips">${[['none','Sin comparar'],['prev','Periodo anterior'],['custom','Otro periodo…']].map(x=>chip('ancmp','c',x[0],x[1],an.cmp===x[0])).join('')}</div>
+  ${an.cmp==='custom'?`<div class="row"><div class="grow"><label class="f">Comparar desde</label><input type="date" class="in" id="an_cd" value="${an.cdesde||''}"></div><div class="grow"><label class="f">Comparar hasta</label><input type="date" class="in" id="an_ch" value="${an.chasta||''}"></div></div>`:''}
+  <div style="margin-top:8px"><button class="btn sm" data-act="anload" style="width:100%">Ver periodo</button></div>
+  ${B?`<div class="muted" style="margin-top:6px">Comparando <b>${ddmm(an.desde)}–${ddmm(an.hasta)}</b> (${A.P.length} días con datos) frente a <b>${ddmm(an.cdesde)}–${ddmm(an.chasta)}</b> (${B.P.length} días con datos)</div>`:''}</div>`;
+  if(!A.P.length)return css+ctrl+'<div class="card muted">No hay días con consumos en este periodo.</div>';
+  const kpi=(b,s,d)=>`<div class="kpi"><b>${b}</b><span>${s}</span>${d?'<small>'+d+'</small>':''}</div>`;
+  const kp=`<div class="kpis">${kpi(eur(A.cpax),'Coste por pax',B?dl(A.cpax,B.cpax,'down'):'')}${kpi(eur(A.totC),`Coste consumo · ${A.P.length} días`,B?dl(A.totC,B.totC,'down'):'')}${kpi(A.totPax,'PAX',B?dl(A.totPax,B.totPax,'none'):'')}${kpi(eur(A.totM),`Merma (${nf(A.totB?A.totM/A.totB*100:0,1)} % del coste bruto)`,B?dl(A.totM,B.totM,'down'):'')}</div>`;
+  const topF=A.fams.slice(0,8).map(f=>f.cat),colorOf=c=>{const i=topF.indexOf(c);return i<0?CAT_COL[8]:CAT_COL[i];};
+  const stackKey=c=>topF.includes(c)?c:'Otras';
+  const labels=A.P.map(x=>ddmm(x.fecha));
+  const mf={eur:[x=>x.consumo,v=>nf(v,0),'€ consumo'],cpax:[x=>x.cpax,v=>nf(v,2),'€ por pax'],pax:[x=>x.pax,v=>nf(v,0),'PAX']}[an.met];
+  let ch;
+  if(an.vw==='fam'&&verProd){
+    const keys=[...topF,'Otras'],stacks=A.P.map(d=>{const s={};for(const g of A.fams){const v=g.byDay.get(d.fecha)||0;if(v>0)s[stackKey(g.cat)]=(s[stackKey(g.cat)]||0)+v;}return s;});
+    ch=chartStack(labels,stacks,keys,k=>k==='Otras'?CAT_COL[8]:colorOf(k),v=>nf(v,0))+`<div class="legend">${keys.filter(k=>stacks.some(s=>s[k]>0)).map(k=>`<span><span class="dot" style="background:${k==='Otras'?CAT_COL[8]:colorOf(k)}"></span> ${esc(k)}</span>`).join('')}</div>`;
+  }else{
+    const ser=[{name:'Periodo',color:'#0f2747',vals:A.P.map(mf[0])}];
+    if(B)ser.push({name:'Comparación',color:'#b8934f',vals:A.P.map((_,i)=>B.P[i]?mf[0](B.P[i]):null)});
+    ch=chartBars(labels,ser,mf[1],B?A.P.map((_,i)=>B.P[i]?ddmm(B.P[i].fecha):''):null)+(B?`<div class="legend"><span><span class="dot" style="background:#0f2747"></span> ${ddmm(an.desde)}–${ddmm(an.hasta)}</span><span><span class="dot" style="background:#b8934f"></span> ${ddmm(an.cdesde)}–${ddmm(an.chasta)} (día 1 con día 1, día 2 con día 2…)</span></div>`:'');
+  }
+  const dia=`<div class="card"><b>Consumo por día</b><div class="chips" style="margin-top:6px">${[['eur','€ consumo'],['cpax','€ por pax'],['pax','PAX']].map(x=>chip('anmet','m',x[0],x[1],an.met===x[0]&&an.vw==='tot')).join('')}${verProd?chip('anvw','v','fam','Por familia',an.vw==='fam'):''}</div>${ch}</div>`;
+  const tabla=`<div class="card scrollx"><table><tr><th>Día</th><th>PAX</th><th>Consumo</th><th>€/pax</th><th>Merma</th></tr>${A.P.map(x=>`<tr><td>${fechaLarga(x.fecha)}${x.estado!=='cerrado'?' ·<i>abierto</i>':''}</td><td>${x.pax}</td><td>${eur(x.consumo)}</td><td><b>${nf(x.cpax)}</b></td><td>${eur(x.merma)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td><b>${A.totPax}</b></td><td><b>${eur(A.totC)}</b></td><td><b>${nf(A.cpax)}</b></td><td><b>${eur(A.totM)}</b></td></tr></table></div>`;
+  if(!verProd)return css+ctrl+kp+dia+tabla;
+  const fmx=Math.max(1e-9,...A.fams.map(f=>f.eur),...(B?B.fams.map(f=>f.eur):[0]));
+  const bfam=B?new Map(B.fams.map(f=>[f.cat,f])):null;
+  const fams=`<div class="card"><b>Consumo por familia</b><div class="muted">Toca una familia para filtrar los rankings de abajo.</div>${A.fams.filter(f=>f.eur>0).map(f=>{const b=bfam&&bfam.get(f.cat);return `<div class="fam ${an.fam===f.cat?'on':''}" data-act="anfam" data-f="${esc(f.cat)}"><div class="fr"><span class="dot" style="background:${colorOf(f.cat)}"></span><b>${esc(f.cat)}</b><span class="grow"></span><b>${eur(f.eur)}</b><small class="muted">${nf(A.totC?f.eur/A.totC*100:0,1)} % · ${nf(A.totPax?f.eur/A.totPax:0,2)} €/pax</small></div><div class="bar"><i style="width:${f.eur/fmx*100}%;background:${colorOf(f.cat)}"></i></div>${B?`<div class="bar"><i class="cb" style="width:${(b?b.eur:0)/fmx*100}%"></i></div><small class="dl">ant. ${eur(b?b.eur:0)}</small> ${dl(f.eur,b?b.eur:0,'down')}`:''}</div>`;}).join('')}</div>`;
+  const filtF=o=>an.fam==='Todas'||o.cat===an.fam;
+  const lst=[...A.pc.values()].filter(filtF);
+  const totF=lst.reduce((a,o)=>a+o.eur,0);
+  const cu0={};for(const o of lst)if(o.cons>0)cu0[uk(o.uni)]=(cu0[uk(o.uni)]||0)+1;
+  const unis=Object.keys(cu0).sort((a,b)=>cu0[b]-cu0[a]);
+  const uni=unis.includes(an.uni)?an.uni:(unis.includes('KG')?'KG':unis[0]);
+  const fchips=`<div class="chips">${chip('anfam','f','','Todas las familias',an.fam==='Todas')}${A.fams.filter(f=>f.eur>0).map(f=>chip('anfam','f',f.cat,esc(f.cat),an.fam===f.cat)).join('')}</div>`;
+  const nchips=`<div class="chips">${[10,25,50].map(n=>chip('annrk','n',n,'Top '+n,an.nrk===n)).join('')}</div>`;
+  const rkE=`<div class="card"><b>Top ${an.nrk} por valor (€)</b>${an.fam!=='Todas'?` <span class="tag">${esc(an.fam)}</span>`:''}${fchips}${nchips}${rankRows(A,B,'eur',filtF,an.nrk,totF)}</div>`;
+  const filtQ=o=>filtF(o)&&uk(o.uni)===uni;
+  const rkQ=`<div class="card"><b>Top ${an.nrk} por cantidad</b><div class="muted">Las cantidades solo se comparan entre artículos de la misma unidad: elige cuál.</div><div class="chips" style="margin-top:6px">${unis.map(u=>chip('anuni','u',u,ucap(u,2),u===uni)).join('')}</div>${rankRows(A,B,'qty',filtQ,an.nrk,0)}</div>`;
+  const sel=an.art&&A.pc.get(an.art);
+  const opts=[...A.pc.values()].sort((a,b)=>(a.p?a.p.descripcion:'').localeCompare(b.p?b.p.descripcion:'','es')).map(o=>`<option value="${esc(o.p?o.p.descripcion:o.codigo)}">`).join('');
+  let art=`<div class="card" id="anart"><b>Evolución de un artículo</b><div class="muted">Toca un artículo de los rankings, o búscalo aquí.</div><div class="row" style="margin-top:6px"><input class="in grow" id="an_art" list="an_arts" placeholder="Escribe el nombre…" value="${sel?esc(sel.p?sel.p.descripcion:sel.codigo):''}"><datalist id="an_arts">${opts}</datalist><button class="btn sm" data-act="anart">Ver</button></div>`;
+  if(sel){
+    const bo=B&&B.pc.get(sel.codigo);
+    const ser=[{name:'Cantidad',color:'#0f2747',vals:sel.per.map(x=>x.v)}];
+    art+=`<div style="margin-top:8px"><b>${esc(sel.p?sel.p.descripcion:sel.codigo)}</b> · <span class="muted">${esc(sel.cat)}</span></div><div class="muted">Total: ${q3(sel.cons)} ${ulp(sel.uni,sel.cons)} · ${eur(sel.eur)}${bo?` · antes ${q3(bo.cons)} ${ulp(sel.uni,bo.cons)} / ${eur(bo.eur)} ${dl(sel.eur,bo.eur,'down')}`:''}</div>${chartBars(sel.per.map(x=>ddmm(x.f)),ser,v=>q3(v))}<div class="scrollx"><table><tr><th>Día</th><th>Cantidad</th><th>€</th><th>Por pax</th></tr>${sel.per.map(x=>`<tr><td>${fechaLarga(x.f)}</td><td>${q3(x.v)} ${ulp(sel.uni,x.v)}</td><td>${eur(x.v*x.cu)}</td><td>${nf(x.pax?x.v/x.pax:0,3)}</td></tr>`).join('')}</table></div>`;
+  }
+  art+='</div>';
+  const dcols=topF.slice(0,6);
+  const dd=`<div class="card scrollx"><b>Consumo por día y familia (€)</b><table><tr><th>Día</th>${dcols.map(c=>`<th><span class="dot" style="background:${colorOf(c)}"></span> ${esc(c)}</th>`).join('')}<th>Otras</th><th>Total</th></tr>${A.P.map(d=>{let rest=d.consumo;const cells=dcols.map(c=>{const v=(A.fam.get(c).byDay.get(d.fecha))||0;rest-=v;return `<td>${nf(v,0)}</td>`;}).join('');return `<tr><td>${fechaLarga(d.fecha)}</td>${cells}<td>${nf(rest,0)}</td><td><b>${nf(d.consumo,0)}</b></td></tr>`;}).join('')}</table></div>`;
   const alertas=[];
-  for(const o of prods){const arr=o.per.filter(x=>x.v>0);if(arr.length<3)continue;const pp=arr.map(x=>x.v/x.pax),med=median(pp);for(const x of arr){const ratio=(x.v/x.pax)/med;const eurd=(x.v-med*x.pax)*x.cu;if((ratio>2||ratio<0.45)&&Math.abs(eurd)>=1)alertas.push({p:o.p,f:x.f,v:x.v,esp:med*x.pax,ratio,eurd});}}
+  for(const o of A.pc.values()){const arr=o.per.filter(x=>x.v>0);if(arr.length<3)continue;const pp=arr.map(x=>x.v/x.pax),med=median(pp);for(const x of arr){const ratio=(x.v/x.pax)/med,eurd=(x.v-med*x.pax)*x.cu;if((ratio>2||ratio<0.45)&&Math.abs(eurd)>=1)alertas.push({p:o.p,f:x.f,v:x.v,esp:med*x.pax,eurd});}}
   alertas.sort((a,b)=>Math.abs(b.eurd)-Math.abs(a.eurd));
-  const neg=[];for(const d of P)for(const r of d.map.values())if(r.consumo<-1e-9)neg.push({f:d.fecha,p:r.p,v:r.consumo});
-  const maxc=Math.max(...P.map(x=>x.cpax),1);
-  return `<div class="card"><div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="an_d" value="${S.an.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="an_h" value="${S.an.hasta}"></div><button class="btn sm" data-act="anload" style="align-self:flex-end">Ver</button></div></div>
-  ${P.length?`<div class="kpis"><div class="kpi"><b>${eur(totC/totPax)}</b><span>Coste/pax ponderado</span></div><div class="kpi"><b>${eur(simple)}</b><span>Coste/pax media simple</span></div><div class="kpi"><b>${eur(totC)}</b><span>Coste consumo · ${totPax} PAX · ${P.length} días</span></div><div class="kpi"><b>${eur(totM)}</b><span>Merma (${nf(totB?totM/totB*100:0,1)}% del coste)</span></div></div>
-  <div class="card"><b>Coste por pax y día</b><svg viewBox="0 0 ${Math.max(P.length*64,300)} 150" style="width:100%;height:170px;margin-top:6px">${P.map((x,i)=>{const h=x.cpax/maxc*100;return `<rect x="${i*64+12}" y="${120-h}" width="40" height="${h}" rx="5" fill="${x.estado==='cerrado'?'#0f2747':'#b8934f'}"/><text x="${i*64+32}" y="${114-h}" font-size="11" text-anchor="middle" fill="#17202e">${nf(x.cpax,2)}</text><text x="${i*64+32}" y="138" font-size="10" text-anchor="middle" fill="#6b7686">${x.fecha.slice(5).split('-').reverse().join('/')}</text>`}).join('')}</svg><div class="muted">Azul = día cerrado · dorado = abierto (provisional)</div></div>
-  <div class="card"><table><tr><th>Día</th><th>PAX</th><th>Consumo</th><th>€/pax</th><th>Merma</th></tr>${P.map(x=>`<tr><td>${fechaLarga(x.fecha)}${x.estado!=='cerrado'?' ·<i>abierto</i>':''}</td><td>${x.pax}</td><td>${eur(x.consumo)}</td><td><b>${nf(x.cpax)}</b></td><td>${eur(x.merma)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td><b>${totPax}</b></td><td><b>${eur(totC)}</b></td><td><b>${nf(totC/totPax)}</b></td><td><b>${eur(totM)}</b></td></tr></table></div>
-  ${verProd?`${neg.length?`<div class="card"><b style="color:var(--bad)">⛔ Consumos negativos (${neg.length})</b>${neg.map(n=>`<div class="muted">${fechaLarga(n.f)} · ${esc(n.p?.descripcion)} · ${q3(n.v)}</div>`).join('')}</div>`:''}
-  <div class="card"><b>⚠️ Alertas de consumo por pax (${alertas.length})</b><div class="muted">Un día se desvía &gt;2× o &lt;0,45× de la mediana del propio artículo (≥ 1 €)</div>${alertas.slice(0,15).map(a=>`<div class="mv"><span class="grow">${fechaLarga(a.f)} · <b>${esc(a.p?.descripcion)}</b></span><span class="muted">${q3(a.v)} vs ~${q3(a.esp)}</span><span class="tag ${a.eurd>0?'r':'w'}">${a.eurd>0?'+':''}${nf(a.eurd,1)} €</span></div>`).join('')||'<div class="muted">Sin alertas 👌</div>'}</div>
-  <div class="card"><b>Top 10 por coste</b><table>${topC.map(o=>`<tr><td>${esc(o.p?.descripcion)}</td><td>${q3(o.cons)} ${ulp(o.p?.unidad_conteo,o.cons)}</td><td><b>${eur(o.eur)}</b></td><td class="muted">${nf(o.eur/totC*100,1)}%</td></tr>`).join('')}</table></div>
-  <div class="card"><b>Mayor merma</b><table>${topM.map(o=>`<tr><td>${esc(o.p?.descripcion)}</td><td>${q3(o.mer)} ${ulp(o.p?.unidad_conteo,o.mer)}</td><td><b>${eur(o.merE)}</b></td></tr>`).join('')||'<tr><td class="muted">Sin merma registrada</td></tr>'}</table></div>`:''}`:'<div class="card muted">No hay días con PAX en este periodo.</div>'}`;
+  const neg=[];for(const d of A.P)for(const r of d.map.values())if(r.consumo<-1e-9)neg.push({f:d.fecha,p:r.p,v:r.consumo});
+  const topM=[...A.pc.values()].filter(x=>x.merE>0).sort((a,b)=>b.merE-a.merE).slice(0,8);
+  const extra=`${neg.length?`<div class="card"><b style="color:var(--bad)">⛔ Consumos negativos (${neg.length})</b>${neg.map(n=>`<div class="muted">${fechaLarga(n.f)} · ${esc(n.p?n.p.descripcion:'')} · ${q3(n.v)}</div>`).join('')}</div>`:''}
+  <div class="card"><b>⚠️ Alertas de consumo por pax (${alertas.length})</b><div class="muted">Un día se desvía &gt;2× o &lt;0,45× de la mediana del propio artículo (≥ 1 €)</div>${alertas.slice(0,15).map(a=>`<div class="mv"><span class="grow">${fechaLarga(a.f)} · <b>${esc(a.p?a.p.descripcion:'')}</b></span><span class="muted">${q3(a.v)} vs ~${q3(a.esp)}</span><span class="tag ${a.eurd>0?'r':'w'}">${a.eurd>0?'+':''}${nf(a.eurd,1)} €</span></div>`).join('')||'<div class="muted">Sin alertas 👌</div>'}</div>
+  <div class="card"><b>Mayor merma</b><table>${topM.map(o=>`<tr><td>${esc(o.p?o.p.descripcion:'')}</td><td>${q3(o.mer)} ${ulp(o.uni,o.mer)}</td><td><b>${eur(o.merE)}</b></td></tr>`).join('')||'<tr><td class="muted">Sin merma registrada</td></tr>'}</table></div>`;
+  return css+ctrl+kp+dia+fams+rkE+rkQ+art+dd+tabla+extra;
 }
 
 /* ---------- CATÁLOGO ---------- */
@@ -502,7 +613,7 @@ document.addEventListener('click',async e=>{
   try{
   if(a==='login'){const n=$('#lg_n').value,p=$('#lg_p').value;if(!n||!p)return toast('Nombre y PIN',true);try{S.user=await DB.login(n,p);if(!CLOUD)sessionStorage.setItem('kd_user',JSON.stringify(S.user));await afterLogin();}catch(er){toast(er.message,true);}}
   else if(a==='logout'){sessionStorage.removeItem('kd_user');location.reload();}
-  else if(a==='tab'){S.tab=b.dataset.t;if(S.tab==='analisis'&&!S.an.data)S.an.data=null;render();window.scrollTo(0,0);}
+  else if(a==='tab'){S.tab=b.dataset.t;if(S.tab==='analisis')S.an.data=null;render();window.scrollTo(0,0);}
   else if(a==='vista'){S.vista=b.dataset.v;render();}
   else if(a==='cat'){S.cat=b.dataset.c;render();}
   else if(a==='open')openItem(b.dataset.c);
@@ -521,7 +632,24 @@ document.addEventListener('click',async e=>{
   else if(a==='cedit'){const r=agg(S.day.movs,S.day.cierres,S.prods).get(b.dataset.c);S.cierreEdit[b.dataset.c]={A:String(r.A),M:String(r.M),R:r.A>0?(r.reut?'si':'no'):''};render(true);}
   else if(a==='cerrardia'){const items=cierreItems();const tot=totales(agg(S.day.movs,S.day.cierres,S.prods));const pax=S.day.dia.pax;if(confirm(`Cerrar ${fechaLarga(S.fecha)}?\n\nPAX: ${pax}\nCoste consumo: ${eur(tot.consumo)}\nCoste/pax: ${eur(tot.consumo/pax)}\nMerma: ${eur(tot.merma)}\n\nTras cerrar no se podrá modificar (solo un admin puede reabrir).`)){await DB.cerrarDia(S.fecha,S.user.nombre);await loadDay(true);render();toast('Día cerrado ✔');}}
   else if(a==='reabrir'){if(confirm('¿Reabrir el día?')){await DB.reabrirDia(S.fecha);await loadDay(true);render();}}
-  else if(a==='anload'){S.an.desde=$('#an_d').value;S.an.hasta=$('#an_h').value;S.an.data=null;render();}
+    else if(a==='anload'||a==='anq'||a==='ancmp'){
+    const g=id=>{const e=$('#'+id);return e&&e.value?e.value:null;};
+    if(g('an_d'))S.an.desde=g('an_d');if(g('an_h'))S.an.hasta=g('an_h');if(g('an_cd'))S.an.cdesde=g('an_cd');if(g('an_ch'))S.an.chasta=g('an_ch');
+    if(a==='anq'){const q=b.dataset.q,t=today(),d=new Date(t+'T12:00:00');
+      if(q==='7'){S.an.desde=addDays(t,-6);S.an.hasta=t;}
+      else if(q==='30'){S.an.desde=addDays(t,-29);S.an.hasta=t;}
+      else if(q==='mes'){S.an.desde=t.slice(0,8)+'01';S.an.hasta=t;}
+      else if(q==='mesant'){S.an.desde=isoDate(new Date(d.getFullYear(),d.getMonth()-1,1,12));S.an.hasta=isoDate(new Date(d.getFullYear(),d.getMonth(),0,12));}
+      else{S.an.desde='2026-01-01';S.an.hasta=t;}}
+    if(a==='ancmp'){S.an.cmp=b.dataset.c;if(S.an.cmp==='custom'&&!S.an.cdesde){const n=diffDays(S.an.desde,S.an.hasta)+1;S.an.chasta=addDays(S.an.desde,-1);S.an.cdesde=addDays(S.an.desde,-n);}}
+    if(S.an.desde>S.an.hasta||(S.an.cmp==='custom'&&S.an.cdesde>S.an.chasta))return toast('Fechas no válidas',true);
+    S.an.data=null;render();}
+  else if(a==='anmet'){S.an.met=b.dataset.m;S.an.vw='tot';render(true);}
+  else if(a==='anvw'){S.an.vw='fam';render(true);}
+  else if(a==='anfam'){const f=b.dataset.f;S.an.fam=(!f||S.an.fam===f)?'Todas':f;render(true);}
+  else if(a==='annrk'){S.an.nrk=+b.dataset.n;render(true);}
+  else if(a==='anuni'){S.an.uni=b.dataset.u;render(true);}
+  else if(a==='anart'){let c=b.dataset.c;if(!c){const v=(($('#an_art')||{}).value||'').trim().toLowerCase();const L=[...analiza(S.an.data).pc.values()];const o=L.find(x=>x.p&&x.p.descripcion.toLowerCase()===v)||(v&&L.find(x=>x.p&&x.p.descripcion.toLowerCase().includes(v)));if(!o)return toast('Artículo no encontrado en el periodo',true);c=o.codigo;}S.an.art=c;render(true);setTimeout(()=>{const e=$('#anart');if(e)e.scrollIntoView({behavior:'smooth'});},60);}
   else if(a==='cargaxls')$('#xls').click();
   else if(a==='bajaxls')bajaXLS();
   else if(a==='crev'){S.cfilt=S.cfilt==='rev'?'':'rev';render();}
