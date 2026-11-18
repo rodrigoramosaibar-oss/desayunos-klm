@@ -115,10 +115,15 @@ const LocalStore={
   _guard(f){const d=this.db.dias.find(x=>x.fecha===f);if(d&&d.estado==='cerrado')throw new Error('El día '+f+' está cerrado');},
   async addMov(m){this._guard(m.fecha);this.db.movimientos.push({...m,anulado:false});this._save();},
   async anularMov(id,user){const m=this.db.movimientos.find(x=>x.id===id);this._guard(m.fecha);m.anulado=true;m.anulado_por=user;this._save();},
-  async setPax(f,pax){this._guard(f);let d=this.db.dias.find(x=>x.fecha===f);if(!d){d={fecha:f,pax:null,estado:'abierto'};this.db.dias.push(d);}d.pax=pax;this._save();},
+  async setPax(f,pax,force){if(!force)this._guard(f);let d=this.db.dias.find(x=>x.fecha===f);if(!d){d={fecha:f,pax:null,estado:'abierto'};this.db.dias.push(d);}d.pax=pax;this._save();},
   async saveCierre(c){this._guard(c.fecha);const i=this.db.cierres.findIndex(x=>x.fecha===c.fecha&&x.codigo===c.codigo);if(i>=0)this.db.cierres[i]=c;else this.db.cierres.push(c);this._save();},
   async cerrarDia(f,user){let d=this.db.dias.find(x=>x.fecha===f);if(!d){d={fecha:f,pax:null,estado:'abierto'};this.db.dias.push(d);}d.estado='cerrado';d.cerrado_por=user;d.cerrado_at=new Date().toISOString();this._save();},
-  async reabrirDia(f){const d=this.db.dias.find(x=>x.fecha===f);if(d)d.estado='abierto';this._save();}
+  async reabrirDia(f){const d=this.db.dias.find(x=>x.fecha===f);if(d)d.estado='abierto';this._save();},
+  async delDia(f){this.db.movimientos=this.db.movimientos.filter(m=>m.fecha!==f);this.db.cierres=this.db.cierres.filter(c=>c.fecha!==f);this.db.dias=this.db.dias.filter(d=>d.fecha!==f);this._save();},
+  async addMovs(l){this.db.movimientos.push(...l);this._save();},
+  async saveCierres(l){for(const c of l){const i=this.db.cierres.findIndex(x=>x.fecha===c.fecha&&x.codigo===c.codigo);if(i>=0)this.db.cierres[i]=c;else this.db.cierres.push(c);}this._save();},
+  async getAvisos(){return this.db.avisos||[];},
+  async setAviso(a){this.db.avisos=(this.db.avisos||[]).filter(x=>!(x.fecha===a.fecha&&x.codigo===a.codigo));this.db.avisos.push(a);this._save();}
 };
 
 const CloudStore={
@@ -131,18 +136,25 @@ const CloudStore={
     const t=await r.text();let j;try{j=t?JSON.parse(t):[]}catch{j=t}
     if(!r.ok)throw new Error((j&&(j.message||j.hint))||('Error '+r.status));
     return j;},
-  async login(nombre,pin){const slug=nombre.trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z0-9]+/g,'');await this._auth({email:slug+'@klm-desayunos.app',password:pin},'password');const p=await this._req('GET','perfiles?user_id=eq.'+this.uid+'&select=nombre,rol');if(!p.length)throw new Error('Usuario sin perfil: pídele al admin que lo dé de alta');return{nombre:p[0].nombre,rol:p[0].rol};},
+  async login(nombre,pin){const slug=nombre.trim().toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,'');await this._auth({email:slug+'@klm-desayunos.app',password:pin},'password');const p=await this._req('GET','perfiles?user_id=eq.'+this.uid+'&select=nombre,rol');if(!p.length)throw new Error('Usuario sin perfil: pídele al admin que lo dé de alta');return{nombre:p[0].nombre,rol:p[0].rol};},
   async getProductos(){const out=[];for(let o=0;;o+=1000){const r=await this._req('GET','productos?select=*&order=descripcion&limit=1000&offset='+o);out.push(...r);if(r.length<1000)break;}return out;},
   async upsertProductos(list,user){const rows=list.map(p=>{const{coste_unitario,...r}=p;return{...r,updated_by:user};});for(let i=0;i<rows.length;i+=200)await this._req('POST','productos?on_conflict=codigo',rows.slice(i,i+200),{Prefer:'resolution=merge-duplicates,return=minimal'});},
   async getDia(f){const[d,m,c]=await Promise.all([this._req('GET','dias?fecha=eq.'+f),this._req('GET','movimientos?fecha=eq.'+f+'&order=ts'),this._req('GET','cierres?fecha=eq.'+f)]);return{dia:d[0]||null,movs:m,cierres:c};},
-  async getRango(a,b){const q=`fecha=gte.${a}&fecha=lte.${b}`;const[d,m,c]=await Promise.all([this._req('GET','dias?'+q),this._req('GET','movimientos?'+q+'&limit=100000'),this._req('GET','cierres?'+q+'&limit=100000')]);return{dias:d,movs:m,cierres:c};},
+  async _all(path,order){const out=[];for(let o=0;;o+=1000){const r=await this._req('GET',path+'&order='+order+'&limit=1000&offset='+o);out.push(...r);if(r.length<1000)break;}return out;},
+  async getRango(a,b){const q=`fecha=gte.${a}&fecha=lte.${b}`;const[d,m,c]=await Promise.all([this._all('dias?'+q,'fecha'),this._all('movimientos?'+q,'fecha,ts,id'),this._all('cierres?'+q,'fecha,codigo')]);return{dias:d,movs:m,cierres:c};},
   async getUltimoCerradoAntes(f){const d=await this._req('GET','dias?estado=eq.cerrado&fecha=lt.'+f+'&order=fecha.desc&limit=1');if(!d.length)return null;const c=await this._req('GET','cierres?fecha=eq.'+d[0].fecha);return{fecha:d[0].fecha,cierres:c};},
   async addMov(m){await this._req('POST','movimientos',m,{Prefer:'return=minimal'});},
   async anularMov(id,user){await this._req('PATCH','movimientos?id=eq.'+id,{anulado:true,anulado_por:user},{Prefer:'return=minimal'});},
   async setPax(f,pax){await this._req('POST','dias?on_conflict=fecha',{fecha:f,pax},{Prefer:'resolution=merge-duplicates,return=minimal'});},
   async saveCierre(c){await this._req('POST','cierres?on_conflict=fecha,codigo',c,{Prefer:'resolution=merge-duplicates,return=minimal'});},
   async cerrarDia(f,user){await this._req('POST','dias?on_conflict=fecha',{fecha:f,estado:'cerrado',cerrado_por:user,cerrado_at:new Date().toISOString()},{Prefer:'resolution=merge-duplicates,return=minimal'});},
-  async reabrirDia(f){await this._req('PATCH','dias?fecha=eq.'+f,{estado:'abierto'},{Prefer:'return=minimal'});}
+  async reabrirDia(f){await this._req('PATCH','dias?fecha=eq.'+f,{estado:'abierto'},{Prefer:'return=minimal'});},
+  async delDia(f){const q='fecha=eq.'+f;await this._req('DELETE','movimientos?'+q,null,{Prefer:'return=minimal'});await this._req('DELETE','cierres?'+q,null,{Prefer:'return=minimal'});await this._req('DELETE','dias?'+q,null,{Prefer:'return=minimal'});},
+  async addMovs(l){for(let i=0;i<l.length;i+=500)await this._req('POST','movimientos',l.slice(i,i+500),{Prefer:'return=minimal'});},
+  async saveCierres(l){for(let i=0;i<l.length;i+=500)await this._req('POST','cierres?on_conflict=fecha,codigo',l.slice(i,i+500),{Prefer:'resolution=merge-duplicates,return=minimal'});},
+  _avL(){try{return JSON.parse(localStorage.getItem('kd_avisos')||'[]');}catch{return[];}},
+  async getAvisos(){try{const r=await this._all('avisos?select=*','fecha,codigo');S._avisosLocal=false;return r;}catch(e){S._avisosLocal=true;return this._avL();}},
+  async setAviso(a){try{await this._req('POST','avisos?on_conflict=fecha,codigo',a,{Prefer:'resolution=merge-duplicates,return=minimal'});}catch(e){S._avisosLocal=true;const l=this._avL().filter(x=>!(x.fecha===a.fecha&&x.codigo===a.codigo));l.push(a);localStorage.setItem('kd_avisos',JSON.stringify(l));}}
 };
 const CLOUD=!!(window.CFG&&CFG.SUPABASE_URL&&CFG.SUPABASE_KEY);
 const DB=CLOUD?CloudStore:LocalStore;
@@ -150,10 +162,11 @@ const DB=CLOUD?CloudStore:LocalStore;
 /* ============================================================
    ESTADO
 ============================================================ */
-const S={user:null,fecha:today(),prods:new Map(),day:{dia:null,movs:[],cierres:[]},prev:null,hist:null,tab:'captura',q:'',cat:'Todas',vista:'usados',draft:{},cierreEdit:{},busy:false,
+const S={user:null,fecha:today(),prods:new Map(),day:{dia:null,movs:[],cierres:[]},prev:null,hist:null,tab:'captura',q:'',cat:'Todas',vista:'usados',draft:{},cierreEdit:{},busy:false,avisos:new Map(),
   an:{desde:null,hasta:null,data:null},ex:{desde:null,hasta:null}};
 const ROLES={admin:['captura','cierre','analisis','control','catalogo','exportar'],cocina:['captura','cierre'],chef:['captura','cierre','analisis','control'],lectura:['analisis','control'],ventas:['analisis']};
 const isClosed=()=>S.day.dia&&S.day.dia.estado==='cerrado';
+const isAdmin=()=>!!(S.user&&S.user.rol==='admin');
 const canWrite=()=>S.user&&['admin','cocina','chef'].includes(S.user.rol)&&!isClosed();
 const prodList=()=>[...S.prods.values()];
 
@@ -180,7 +193,7 @@ async function boot(){
 async function afterLogin(){
   const list=await DB.getProductos();S.prods=new Map(list.map(p=>[p.codigo,p]));
   S.tab=ROLES[S.user.rol][0];
-  await loadDay();render();
+  await loadDay();render();loadBase().catch(()=>{});
   setInterval(async()=>{if(document.hidden||!S.user||$('.sheet-bg'))return;if(['captura','cierre'].includes(S.tab)&&!S.cierreEdit._typing){try{await loadDay(true);render(true);}catch(e){}}},6000);
 }
 async function loadDay(quiet){
@@ -207,7 +220,7 @@ function render(keepScroll){
    ${CLOUD?'':'<span class="pill demo">DEMO</span>'}
    <span class="pill ${closed?'cerrado':''}">${closed?'🔒 Cerrado':'Abierto'}</span>
    <button class="pill" style="border:0;color:#fff" data-act="logout">Salir</button></div>
-   ${['captura','cierre'].includes(S.tab)?`<div class="hrow" style="margin-top:8px"><input type="date" class="date" id="fecha" value="${S.fecha}"><span class="pill">PAX <b id="paxv">${S.day.dia&&S.day.dia.pax!=null?S.day.dia.pax:'—'}</b></span>${canWrite()?'<button class="pill" style="border:0;color:#fff" data-act="pax">Editar PAX</button>':''}</div>`:''}
+   ${['captura','cierre'].includes(S.tab)?`<div class="hrow" style="margin-top:8px;flex-wrap:wrap"><input type="date" class="date" id="fecha" value="${S.fecha}"><span class="pill">PAX <b id="paxv">${S.day.dia&&S.day.dia.pax!=null?S.day.dia.pax:'—'}</b></span>${(canWrite()||isAdmin())?'<button class="pill" style="border:0;color:#fff" data-act="pax">Editar PAX</button>':''}${isAdmin()&&(S.day.dia||S.day.movs.length||S.day.cierres.length)?'<button class="pill" style="border:0;color:#fff;background:#c62828" data-act="deldia">🗑 Eliminar día</button>':''}</div>`:''}
    ${S.tab==='captura'?`<input class="search" id="q" placeholder="🔍 Buscar artículo…" value="${esc(S.q)}" autocomplete="off">`:''}</header>`;
   const body=S.tab==='captura'?vCaptura():S.tab==='cierre'?vCierre():S.tab==='analisis'?vAnalisis():S.tab==='control'?vControl():S.tab==='catalogo'?vCatalogo():vExportar();
   const names={captura:['✏️','Captura'],cierre:['✅','Cierre'],analisis:['📊','Ventas'],control:['🔎','Alertas'],catalogo:['📦','Catálogo'],exportar:['⬇️','Exportar']};
@@ -235,7 +248,7 @@ function vCaptura(){
   if(canWrite()&&S.prev&&!hasArr){const n=S.prev.cierres.filter(c=>c.reutiliza&&+c.aprovechamiento>0);if(n.length)ban=`<div class="banner">🔁 Ayer (${fechaLarga(S.prev.fecha)}) quedaron <b>${n.length}</b> artículos para reutilizar. <button class="btn gold sm" data-act="arrastre" style="margin-left:6px">Cargar sobrantes de ayer</button></div>`;}
   if(S.day.dia==null||S.day.dia.pax==null)ban+=`<div class="banner">⚠️ Falta indicar los <b>PAX</b> del día (se necesitan para cerrar).</div>`;
   const q=S.q.trim();
-  return `${ban}<div class="seg" style="margin-bottom:8px">${[['usados','Usados hoy'],['frecuentes','Frecuentes'],['todos','Todos']].map(([k,t])=>`<button class="${S.vista===k?'on':''}" data-act="vista" data-v="${k}">${t}</button>`).join('')}</div>
+  return `${ban}${canWrite()?'<button class="btn gold sm" data-act="nuevo" style="width:100%;margin-bottom:8px">➕ Artículo nuevo (no está en el catálogo)</button>':''}<div class="seg" style="margin-bottom:8px">${[['usados','Usados hoy'],['frecuentes','Frecuentes'],['todos','Todos']].map(([k,t])=>`<button class="${S.vista===k?'on':''}" data-act="vista" data-v="${k}">${t}</button>`).join('')}</div>
   <div class="chips">${cats.map(c=>`<button class="chip ${S.cat===c?'on':''}" data-act="cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>
   ${l.length?l.slice(0,300).map(p=>{const r=used.get(p.codigo);return `<button class="item" data-act="open" data-c="${esc(p.codigo)}"><div class="n"><b>${esc(p.descripcion)}</b><span>${esc(p.categoria||'')} · ${eur(cu(p))}/${ul(p.unidad_conteo)}${p.nuevo?' · <b style="color:#c27a00">NUEVO</b>':''}</span></div>${r&&r.sacado>0?`<span class="tag g">${q3(r.sacado)} ${ulp(p.unidad_conteo,r.sacado)}</span>`:`<span class="tag">+</span>`}</button>`}).join(''):`<div class="card muted">${S.vista==='usados'&&!q?'Aún no hay cantidades hoy. Busca un artículo arriba o cambia a «Todos».':'Sin resultados.'}</div>`}
   ${l.length>300?'<div class="muted">Mostrando 300: afina la búsqueda.</div>':''}
@@ -252,6 +265,7 @@ function openItem(code){
   const prevC=S.prev&&S.prev.cierres.find(c=>c.codigo===code&&c.reutiliza&&+c.aprovechamiento>0);
   const d=sheet(`<h3>${esc(p.descripcion)}</h3><div class="muted">${esc(p.categoria||'')} · se cuenta en <b>${ulp(p.unidad_conteo,2).toUpperCase()}</b> · ${eur(cu(p))} por ${ul(p.unidad_conteo)}</div>
   ${p.revisar?`<div class="banner" style="margin-top:8px">⚠️ ${esc(p.revisar)}</div>`:''}
+  ${(()=>{const h=sacHint(code);return h?`<div class="banner" style="margin-top:8px;background:#eef4ff;border-color:#c9d9f5">📈 Con ${S.day.dia.pax} pax lo habitual es sacar ~<b>${q3(h.pred)} ${ulp(p.unidad_conteo,h.pred)}</b> en total (entre ${q3(h.lo)} y ${q3(h.hi)}) y consumir ~${q3(h.cons)}. Aprendido de ${h.n} días.</div>`:'';})()}
   ${prevC?`<div class="banner" style="margin-top:8px">🔁 Ayer sobraron <b>${q3(prevC.aprovechamiento)} ${ulp(p.unidad_conteo,prevC.aprovechamiento)}</b> para reutilizar.</div>`:''}
   ${canWrite()?`<div class="seg" style="margin:12px 0 8px"><button data-act="tipo" data-t="expuesto" class="${tipoDef==='expuesto'?'on':''}">Expuesto</button><button data-act="tipo" data-t="reposicion" class="${tipoDef==='reposicion'?'on':''}">Reposición</button></div>
   <label class="f">Cantidad en <b>${ulp(p.unidad_conteo,2).toUpperCase()}</b></label><input class="in qtyin" id="qty" inputmode="decimal" placeholder="0" autocomplete="off">
@@ -273,7 +287,9 @@ async function addMov(code){
   const advert=[];
   if(v>=1000)advert.push('cantidad muy grande');
   if(Math.round(v*1000)/1000!==v)advert.push('demasiados decimales');
-  const hist=histMax(code);if(hist&&v>hist*2.5&&hist>0)advert.push(`más de 2,5× el máximo habitual (${q3(hist)} ${p.unidad_conteo}/día)`);
+  const cur0=agg(S.day.movs.filter(m=>m.codigo===code),[],S.prods).get(code),sacTot=(cur0?cur0.sacado:0)+v,h=sacHint(code);
+  if(h){if(sacTot>h.hard&&(sacTot-h.pred)*cu(p)>=1)advert.push(`con esto llevas ${q3(sacTot)} ${ulp(p.unidad_conteo,sacTot)} sacadas hoy y para ${S.day.dia.pax} pax lo habitual es ~${q3(h.pred)} (tope normal ~${q3(h.hi)})`);}
+  else{const hist=histMax(code);if(hist&&v>hist*2.5&&hist>0)advert.push(`más de 2,5× el máximo habitual (${q3(hist)} ${p.unidad_conteo}/día)`);}
   const dup=S.day.movs.find(m=>m.codigo===code&&!m.anulado&&m.tipo===tipo&&+m.cantidad===v&&Date.now()-new Date(m.ts).getTime()<20000);if(dup)advert.push('misma cantidad añadida hace segundos');
   if(advert.length&&!confirm(`⚠️ ${p.descripcion}\n${q3(v)} ${ulp(p.unidad_conteo,v)}: ${advert.join(', ')}.\n\n¿Es correcto?`))return;
   const m={id:nid(),fecha:S.fecha,codigo:code,tipo,cantidad:v,origen:'manual',usuario:S.user.nombre,ts:new Date().toISOString(),anulado:false};
@@ -281,20 +297,54 @@ async function addMov(code){
 }
 function histMax(code){if(!S.hist)return 0;const by=new Map();for(const m of S.hist.movs){if(m.anulado||m.codigo!==code||m.fecha===S.fecha)continue;by.set(m.fecha,(by.get(m.fecha)||0)+ +m.cantidad);}const a=[...by.values()];return a.length>=3?Math.max(...a):0;}
 
-/* ---------- ALTA RÁPIDA ---------- */
-function openNuevo(){
-  const cats=[...new Set(prodList().map(p=>p.categoria||'Otros'))].sort();
-  sheet(`<h3>Artículo nuevo</h3><div class="muted">Quedará marcado «NUEVO» para que compras lo revise.</div>
-  <label class="f">Nombre</label><input class="in" id="n_d" value="${esc(S.q.trim().toUpperCase())}">
-  <label class="f">Categoría</label><select class="in" id="n_c">${cats.map(c=>`<option>${esc(c)}</option>`).join('')}</select>
-  <label class="f">Se cuenta en…</label><select class="in" id="n_u">${['KG','LTR','UT','BTL','TRY','DZ','PK'].map(u=>`<option>${u}</option>`).join('')}</select>
-  <label class="f">Coste por esa unidad (€) — por kg, por litro, por unidad…</label><input class="in" id="n_p" inputmode="decimal" placeholder="0,00">
-  <div class="row" style="margin-top:14px"><button class="btn ghost grow" data-act="closesheet">Cancelar</button><button class="btn grow" data-act="savenuevo">Crear</button></div>`);
+/* ---------- PAX / ELIMINAR DÍA (admin) ---------- */
+function openPax(){
+  if(!(canWrite()||isAdmin()))return;
+  const cur=S.day.dia&&S.day.dia.pax!=null?S.day.dia.pax:'';
+  sheet(`<h3>PAX del día</h3><div class="muted">${fechaLarga(S.fecha)} · comensales de desayuno${isClosed()?' · <b>día cerrado (solo admin)</b>':''}</div><label class="f">PAX (puede ser 0)</label><input class="in qtyin" id="paxin" inputmode="numeric" value="${cur}"><div class="row" style="margin-top:14px"><button class="btn ghost grow" data-act="closesheet">Cancelar</button><button class="btn grow" data-act="savepax">Guardar</button></div>`);
+  setTimeout(()=>{const i=$('#paxin');if(i){i.focus();i.select();}},60);
 }
+async function savePax(){
+  const raw=$('#paxin').value.trim(),n=parseInt(raw,10);
+  if(raw===''||!(n>=0&&n<5000))return toast('PAX no válido (de 0 a 4999)',true);
+  if(isClosed()&&!isAdmin())return toast('Día cerrado',true);
+  const old=S.day.dia&&S.day.dia.pax;
+  if(isClosed()&&old!==n&&!confirm(`El día ${fechaLarga(S.fecha)} está CERRADO.\nPAX ${old==null?'—':old} → ${n}. Cambiará su coste por pax. ¿Guardar?`))return;
+  await DB.setPax(S.fecha,n,isAdmin());
+  closeSheet();await loadDay(true);S.an.data=null;S.base=null;render(true);toast('PAX guardado');
+}
+async function delDiaFlow(){
+  if(!isAdmin())return toast('Solo un admin puede eliminar días',true);
+  const f=S.fecha,d=S.day,nm=d.movs.length,nc=d.cierres.length;
+  if(!d.dia&&!nm&&!nc)return toast('Ese día no tiene datos',true);
+  let warn='';
+  try{const nx=await DB.getDia(addDays(f,1));const arr=nx.movs.filter(m=>m.origen==='arrastre'&&!m.anulado).length;if(arr)warn=`\n\n⚠️ El día siguiente tiene ${arr} cantidades cargadas como «sobrantes de ayer»; se quedarán como están.`;}catch(e){}
+  if(!confirm(`¿ELIMINAR por completo el día ${fechaLarga(f)}?\n\nPAX: ${d.dia&&d.dia.pax!=null?d.dia.pax:'—'} · ${nm} movimientos · ${nc} cierres${d.dia&&d.dia.estado==='cerrado'?' · día CERRADO':''}\n\nSe borra todo y NO se puede deshacer.${warn}`))return;
+  await DB.delDia(f);
+  const chk=await DB.getDia(f);
+  if(chk.dia||chk.movs.length||chk.cierres.length){await loadDay(true);render(true);return toast('No se pudo borrar todo: la base de datos no permite borrar al admin (hay que añadir la política de borrado en Supabase)',true);}
+  S.cierreEdit={};S.an.data=null;S.base=null;await loadDay(true);render(true);toast('Día eliminado');
+}
+
+/* ---------- ALTA RÁPIDA ---------- */
+const UNI_NUEVO=[['KG','Kilo (kg)'],['LTR','Litro (l)'],['UT','Unidad'],['BTL','Botella'],['TRY','Bandeja'],['DZ','Docena'],['PK','Pack'],['CS','Caja'],['CAN','Bote'],['BAG','Bolsa']];
+function openNuevo(){
+  const cats=[...new Set([...prodList().map(p=>p.categoria||'Otros'),'Otros'])].sort((a,b)=>a.localeCompare(b,'es'));
+  sheet(`<h3>Artículo nuevo</h3><div class="muted">Se crea al momento y queda marcado «NUEVO» para que compras lo revise.</div>
+  <label class="f">Nombre</label><input class="in" id="n_d" value="${esc(S.q.trim().toUpperCase())}" autocomplete="off">
+  <label class="f">Unidad de medida (en la que lo cuentas)</label><select class="in" id="n_u">${UNI_NUEVO.map(([k,t])=>`<option value="${k}">${t}</option>`).join('')}</select>
+  <label class="f">Precio de coste por esa unidad (€)</label><input class="in" id="n_p" inputmode="decimal" placeholder="0,00" autocomplete="off">
+  <div class="muted" id="n_h" style="margin-top:4px">&nbsp;</div>
+  <label class="f">Familia</label><select class="in" id="n_c">${cats.map(c=>`<option ${c==='Otros'?'selected':''}>${esc(c)}</option>`).join('')}</select>
+  <div class="row" style="margin-top:14px"><button class="btn ghost grow" data-act="closesheet">Cancelar</button><button class="btn grow" data-act="savenuevo">Crear y añadir</button></div>`);
+  setTimeout(()=>{const i=$('#n_d');if(i)i.focus();},60);
+}
+function hintNuevo(){const h=$('#n_h');if(!h)return;const p=parseNum($('#n_p').value),u=$('#n_u').value;h.innerHTML=isNaN(p)?'&nbsp;':`${eur(p)} por ${ul(u)}`;}
 async function saveNuevo(){
-  const d=$('#n_d').value.trim().toUpperCase(),p=parseNum($('#n_p').value);if(!d)return toast('Falta el nombre',true);if(!(p>=0))return toast('Falta el coste',true);
+  const d=$('#n_d').value.trim().toUpperCase(),p=parseNum($('#n_p').value),u=$('#n_u').value;
+  if(!d)return toast('Falta el nombre',true);if(!(p>0))return toast('Falta el precio de coste (mayor que 0)',true);
   if(prodList().some(x=>x.descripcion.toUpperCase()===d))return toast('Ya existe un artículo con ese nombre',true);
-  const prod={codigo:'NEW-'+Date.now().toString(36).toUpperCase(),descripcion:d,categoria:$('#n_c').value,unidad_compra:$('#n_u').value,precio_compra:p,factor:1,unidad_conteo:$('#n_u').value,activo:true,nuevo:true,revisar:'Artículo nuevo: compras debe confirmar código y precio'};
+  const prod={codigo:'NEW-'+Date.now().toString(36).toUpperCase(),descripcion:d,categoria:$('#n_c').value,unidad_compra:u,precio_compra:p,factor:1,unidad_conteo:u,activo:true,nuevo:true,revisar:'Artículo nuevo: compras debe confirmar código y precio'};
   try{await DB.upsertProductos([prod],S.user.nombre);S.prods.set(prod.codigo,prod);closeSheet();S.q='';S._focusQ=false;render();openItem(prod.codigo);toast('Artículo creado');}catch(e){toast(e.message,true);}
 }
 
@@ -346,7 +396,7 @@ const uk=u=>{const k=String(u||'').trim().toUpperCase();return k==='EA'?'UT':k==
 const ucap=(u,n)=>{const s=ulp(u,n);return s.charAt(0).toUpperCase()+s.slice(1);};
 
 async function loadAnalisis(){
-  S.an=Object.assign({cmp:'none',fam:'Todas',met:'eur',vw:'tot',uni:null,art:null,nrk:10,cdesde:null,chasta:null,cdata:null},S.an);
+  S.an=Object.assign({mode:'cons',cmp:'none',fam:'Todas',met:'eur',vw:'tot',uni:null,art:null,nrk:10,cdesde:null,chasta:null,cdata:null},S.an);
   if(!S.an.desde){S.an.desde=addDays(today(),-30);S.an.hasta=today();}
   let cd=null;
   if(S.an.cmp==='prev'){const n=diffDays(S.an.desde,S.an.hasta)+1;S.an.chasta=addDays(S.an.desde,-1);S.an.cdesde=addDays(S.an.desde,-n);}
@@ -363,12 +413,13 @@ function periodo(data){
   }
   return out;
 }
-function analiza(data){
-  const P=periodo(data),pc=new Map(),fam=new Map();
+function analiza(data,mode){
+  const mer=mode==='mer';
+  const P0=periodo(data),P=mer?P0.map(d=>({...d,consumo:d.merma,cpax:d.merma/d.pax})):P0,pc=new Map(),fam=new Map();
   for(const d of P)for(const r of d.map.values()){
-    const cat=(r.p&&r.p.categoria)||'Otros',val=r.consumo*r.cu;
+    const cat=(r.p&&r.p.categoria)||'Otros',qty=mer?r.M:r.consumo,val=qty*r.cu;
     let o=pc.get(r.codigo);if(!o){o={codigo:r.codigo,p:r.p,cat,uni:(r.p&&r.p.unidad_conteo)||'',cons:0,eur:0,mer:0,merE:0,per:[]};pc.set(r.codigo,o);}
-    o.cons+=r.consumo;o.eur+=val;o.mer+=r.M;o.merE+=r.M*r.cu;o.per.push({f:d.fecha,pax:d.pax,v:r.consumo,cu:r.cu});
+    o.cons+=qty;o.eur+=val;o.mer+=r.M;o.merE+=r.M*r.cu;o.per.push({f:d.fecha,pax:d.pax,v:qty,cu:r.cu});
     let g=fam.get(cat);if(!g){g={cat,eur:0,merE:0,arts:new Set(),byDay:new Map()};fam.set(cat,g);}
     g.eur+=val;g.merE+=r.M*r.cu;g.arts.add(r.codigo);g.byDay.set(d.fecha,(g.byDay.get(d.fecha)||0)+val);
   }
@@ -422,8 +473,8 @@ function rankRows(A,B,metric,filt,n,total){
 }
 function vAnalisis(){
   if(!S.an.data){loadAnalisis().then(render).catch(e=>toast(e.message,true));return '<div class="card muted">Cargando…</div>';}
-  const an=S.an,A=analiza(an.data),B=an.cdata?analiza(an.cdata):null,verProd=S.user.rol!=='ventas';
-  const css=`<h3 style="margin:4px 4px 8px">Análisis de ventas</h3><style>.dl{font-size:11px;color:var(--mut)}.dl.ok{color:#1f8a5b}.dl.bad{color:#c0392b}.kpi small{display:block;margin-top:2px}.bar{height:7px;background:#eef1f6;border-radius:5px;margin:4px 0 2px;overflow:hidden}.bar i{display:block;height:100%;background:var(--navy);border-radius:5px}.bar i.cb{background:#b9c2d0;margin-top:2px;height:4px}.fam{padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer}.fam.on{background:#f3ecdc}.fr{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:3px;display:inline-block}.rk{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line);cursor:pointer}.rn{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}.rv{text-align:right;min-width:110px}.rv b{display:block}.scrollx{overflow-x:auto}.scrollx table{min-width:520px}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:4px}</style>`;
+  const an=S.an,MM=an.mode==='mer',A=analiza(an.data,an.mode),B=an.cdata?analiza(an.cdata,an.mode):null,verProd=S.user.rol!=='ventas';
+  const css=`<h3 style="margin:4px 4px 8px">Análisis de ventas</h3><div class="seg" style="margin-bottom:8px"><button data-act="anmode" data-m="cons" class="${MM?'':'on'}">Consumo</button><button data-act="anmode" data-m="mer" class="${MM?'on':''}">🗑️ Merma</button></div><style>.dl{font-size:11px;color:var(--mut)}.dl.ok{color:#1f8a5b}.dl.bad{color:#c0392b}.kpi small{display:block;margin-top:2px}.bar{height:7px;background:#eef1f6;border-radius:5px;margin:4px 0 2px;overflow:hidden}.bar i{display:block;height:100%;background:var(--navy);border-radius:5px}.bar i.cb{background:#b9c2d0;margin-top:2px;height:4px}.fam{padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer}.fam.on{background:#f3ecdc}.fr{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:3px;display:inline-block}.rk{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line);cursor:pointer}.rn{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}.rv{text-align:right;min-width:110px}.rv b{display:block}.scrollx{overflow-x:auto}.scrollx table{min-width:520px}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:4px}</style>`;
   const chip=(act,attr,val,label,on)=>`<button class="chip ${on?'on':''}" data-act="${act}" data-${attr}="${esc(val)}">${label}</button>`;
   const ctrl=`<div class="card"><div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="an_d" value="${an.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="an_h" value="${an.hasta}"></div></div>
   <div class="chips" style="margin-top:8px">${[['7','Últimos 7 días'],['30','Últimos 30 días'],['mes','Este mes'],['mesant','Mes anterior'],['todo','Todo']].map(x=>chip('anq','q',x[0],x[1],false)).join('')}</div>
@@ -433,7 +484,10 @@ function vAnalisis(){
   ${B?`<div class="muted" style="margin-top:6px">Comparando <b>${ddmm(an.desde)}–${ddmm(an.hasta)}</b> (${A.P.length} días con datos) frente a <b>${ddmm(an.cdesde)}–${ddmm(an.chasta)}</b> (${B.P.length} días con datos)</div>`:''}</div>`;
   if(!A.P.length)return css+ctrl+'<div class="card muted">No hay días con consumos en este periodo.</div>';
   const kpi=(b,s,d)=>`<div class="kpi"><b>${b}</b><span>${s}</span>${d?'<small>'+d+'</small>':''}</div>`;
-  const kp=`<div class="kpis">${kpi(eur(A.cpax),'Coste por pax',B?dl(A.cpax,B.cpax,'down'):'')}${kpi(eur(A.totC),`Coste consumo · ${A.P.length} días`,B?dl(A.totC,B.totC,'down'):'')}${kpi(A.totPax,'PAX',B?dl(A.totPax,B.totPax,'none'):'')}${kpi(eur(A.totM),`Merma (${nf(A.totB?A.totM/A.totB*100:0,1)} % del coste bruto)`,B?dl(A.totM,B.totM,'down'):'')}</div>`;
+  const kpC=`<div class="kpis">${kpi(eur(A.cpax),'Coste por pax',B?dl(A.cpax,B.cpax,'down'):'')}${kpi(eur(A.totC),`Coste consumo · ${A.P.length} días`,B?dl(A.totC,B.totC,'down'):'')}${kpi(A.totPax,'PAX',B?dl(A.totPax,B.totPax,'none'):'')}${kpi(eur(A.totM),`Merma (${nf(A.totB?A.totM/A.totB*100:0,1)} % del coste bruto)`,B?dl(A.totM,B.totM,'down'):'')}</div>`;
+  const nd=A.P.length,ndB=B?B.P.length||1:1;
+  const kpM=`<div class="kpis">${kpi(eur(A.totC),`Merma total · ${nd} días`,B?dl(A.totC,B.totC,'down'):'')}${kpi(eur(A.totC/nd),'Merma media por día',B?dl(A.totC/nd,B.totC/ndB,'down'):'')}${kpi(eur(A.cpax),'Merma por pax',B?dl(A.cpax,B.cpax,'down'):'')}${kpi(nf(A.totB?A.totC/A.totB*100:0,1)+' %','De lo sacado se tira (coste)',B?dl(A.totB?A.totC/A.totB:0,B.totB?B.totC/B.totB:0,'down'):'')}</div>`;
+  const kp=MM?kpM:kpC;
   const topF=A.fams.slice(0,8).map(f=>f.cat),colorOf=c=>{const i=topF.indexOf(c);return i<0?CAT_COL[8]:CAT_COL[i];};
   const stackKey=c=>topF.includes(c)?c:'Otras';
   const labels=A.P.map(x=>ddmm(x.fecha));
@@ -447,12 +501,15 @@ function vAnalisis(){
     if(B)ser.push({name:'Comparación',color:'#b8934f',vals:A.P.map((_,i)=>B.P[i]?mf[0](B.P[i]):null)});
     ch=chartBars(labels,ser,mf[1],B?A.P.map((_,i)=>B.P[i]?ddmm(B.P[i].fecha):''):null)+(B?`<div class="legend"><span><span class="dot" style="background:#0f2747"></span> ${ddmm(an.desde)}–${ddmm(an.hasta)}</span><span><span class="dot" style="background:#b8934f"></span> ${ddmm(an.cdesde)}–${ddmm(an.chasta)} (día 1 con día 1, día 2 con día 2…)</span></div>`:'');
   }
-  const dia=`<div class="card"><b>Consumo por día</b><div class="chips" style="margin-top:6px">${[['eur','€ consumo'],['cpax','€ por pax'],['pax','PAX']].map(x=>chip('anmet','m',x[0],x[1],an.met===x[0]&&an.vw==='tot')).join('')}${verProd?chip('anvw','v','fam','Por familia',an.vw==='fam'):''}</div>${ch}</div>`;
-  const tabla=`<div class="card scrollx"><table><tr><th>Día</th><th>PAX</th><th>Consumo</th><th>€/pax</th><th>Merma</th></tr>${A.P.map(x=>`<tr><td>${fechaLarga(x.fecha)}${x.estado!=='cerrado'?' ·<i>abierto</i>':''}</td><td>${x.pax}</td><td>${eur(x.consumo)}</td><td><b>${nf(x.cpax)}</b></td><td>${eur(x.merma)}</td></tr>`).join('')}<tr><td><b>Total</b></td><td><b>${A.totPax}</b></td><td><b>${eur(A.totC)}</b></td><td><b>${nf(A.cpax)}</b></td><td><b>${eur(A.totM)}</b></td></tr></table></div>`;
+  const dia=`<div class="card"><b>${MM?'Merma por día':'Consumo por día'}</b><div class="chips" style="margin-top:6px">${[['eur',MM?'€ merma':'€ consumo'],['cpax','€ por pax'],['pax','PAX']].map(x=>chip('anmet','m',x[0],x[1],an.met===x[0]&&an.vw==='tot')).join('')}${verProd?chip('anvw','v','fam','Por familia',an.vw==='fam'):''}</div>${ch}</div>`;
+  const tablaC=`<div class="card scrollx"><table><tr><th>Día</th><th>PAX</th><th>Consumo</th><th>€/pax</th><th>Merma</th>${isAdmin()?'<th></th>':''}</tr>${A.P.map(x=>`<tr><td>${fechaLarga(x.fecha)}${x.estado!=='cerrado'?' ·<i>abierto</i>':''}</td><td>${x.pax}</td><td>${eur(x.consumo)}</td><td><b>${nf(x.cpax)}</b></td><td>${eur(x.merma)}</td>${isAdmin()?`<td><button class="btn ghost sm" data-act="adminpax" data-f="${x.fecha}">✏️</button> <button class="btn bad sm" data-act="admindel" data-f="${x.fecha}">🗑</button></td>`:''}</tr>`).join('')}<tr><td><b>Total</b></td><td><b>${A.totPax}</b></td><td><b>${eur(A.totC)}</b></td><td><b>${nf(A.cpax)}</b></td><td><b>${eur(A.totM)}</b></td>${isAdmin()?'<td></td>':''}</tr></table></div>`;
+  const tablaM=`<div class="card scrollx"><table><tr><th>Día</th><th>PAX</th><th>Merma</th><th>€/pax</th><th>% s/ sacado</th>${isAdmin()?'<th></th>':''}</tr>${A.P.map(x=>`<tr><td>${fechaLarga(x.fecha)}${x.estado!=='cerrado'?' ·<i>abierto</i>':''}</td><td>${x.pax}</td><td><b>${eur(x.merma)}</b></td><td>${nf(x.cpax)}</td><td>${nf(x.bruto?x.merma/x.bruto*100:0,1)} %</td>${isAdmin()?`<td><button class="btn ghost sm" data-act="adminpax" data-f="${x.fecha}">✏️</button> <button class="btn bad sm" data-act="admindel" data-f="${x.fecha}">🗑</button></td>`:''}</tr>`).join('')}<tr><td><b>Total</b></td><td><b>${A.totPax}</b></td><td><b>${eur(A.totC)}</b></td><td><b>${nf(A.cpax)}</b></td><td><b>${nf(A.totB?A.totC/A.totB*100:0,1)} %</b></td>${isAdmin()?'<td></td>':''}</tr></table></div>`;
+  const tabla0=MM?tablaM:tablaC;
+  const tabla=tabla0;
   if(!verProd)return css+ctrl+kp+dia+tabla;
   const fmx=Math.max(1e-9,...A.fams.map(f=>f.eur),...(B?B.fams.map(f=>f.eur):[0]));
   const bfam=B?new Map(B.fams.map(f=>[f.cat,f])):null;
-  const fams=`<div class="card"><b>Consumo por familia</b><div class="muted">Toca una familia para filtrar los rankings de abajo.</div>${A.fams.filter(f=>f.eur>0).map(f=>{const b=bfam&&bfam.get(f.cat);return `<div class="fam ${an.fam===f.cat?'on':''}" data-act="anfam" data-f="${esc(f.cat)}"><div class="fr"><span class="dot" style="background:${colorOf(f.cat)}"></span><b>${esc(f.cat)}</b><span class="grow"></span><b>${eur(f.eur)}</b><small class="muted">${nf(A.totC?f.eur/A.totC*100:0,1)} % · ${nf(A.totPax?f.eur/A.totPax:0,2)} €/pax</small></div><div class="bar"><i style="width:${f.eur/fmx*100}%;background:${colorOf(f.cat)}"></i></div>${B?`<div class="bar"><i class="cb" style="width:${(b?b.eur:0)/fmx*100}%"></i></div><small class="dl">ant. ${eur(b?b.eur:0)}</small> ${dl(f.eur,b?b.eur:0,'down')}`:''}</div>`;}).join('')}</div>`;
+  const fams=`<div class="card"><b>${MM?'Merma por familia':'Consumo por familia'}</b><div class="muted">Toca una familia para filtrar los rankings de abajo.</div>${A.fams.filter(f=>f.eur>0).map(f=>{const b=bfam&&bfam.get(f.cat);return `<div class="fam ${an.fam===f.cat?'on':''}" data-act="anfam" data-f="${esc(f.cat)}"><div class="fr"><span class="dot" style="background:${colorOf(f.cat)}"></span><b>${esc(f.cat)}</b><span class="grow"></span><b>${eur(f.eur)}</b><small class="muted">${nf(A.totC?f.eur/A.totC*100:0,1)} % · ${nf(A.totPax?f.eur/A.totPax:0,2)} €/pax</small></div><div class="bar"><i style="width:${f.eur/fmx*100}%;background:${colorOf(f.cat)}"></i></div>${B?`<div class="bar"><i class="cb" style="width:${(b?b.eur:0)/fmx*100}%"></i></div><small class="dl">ant. ${eur(b?b.eur:0)}</small> ${dl(f.eur,b?b.eur:0,'down')}`:''}</div>`;}).join('')}</div>`;
   const filtF=o=>an.fam==='Todas'||o.cat===an.fam;
   const lst=[...A.pc.values()].filter(filtF);
   const totF=lst.reduce((a,o)=>a+o.eur,0);
@@ -461,9 +518,9 @@ function vAnalisis(){
   const uni=unis.includes(an.uni)?an.uni:(unis.includes('KG')?'KG':unis[0]);
   const fchips=`<div class="chips">${chip('anfam','f','','Todas las familias',an.fam==='Todas')}${A.fams.filter(f=>f.eur>0).map(f=>chip('anfam','f',f.cat,esc(f.cat),an.fam===f.cat)).join('')}</div>`;
   const nchips=`<div class="chips">${[10,25,50].map(n=>chip('annrk','n',n,'Top '+n,an.nrk===n)).join('')}</div>`;
-  const rkE=`<div class="card"><b>Top ${an.nrk} por valor (€)</b>${an.fam!=='Todas'?` <span class="tag">${esc(an.fam)}</span>`:''}${fchips}${nchips}${rankRows(A,B,'eur',filtF,an.nrk,totF)}</div>`;
+  const rkE=`<div class="card"><b>Top ${an.nrk} ${MM?'merma ':''}por valor (€)</b>${an.fam!=='Todas'?` <span class="tag">${esc(an.fam)}</span>`:''}${fchips}${nchips}${rankRows(A,B,'eur',filtF,an.nrk,totF)}</div>`;
   const filtQ=o=>filtF(o)&&uk(o.uni)===uni;
-  const rkQ=`<div class="card"><b>Top ${an.nrk} por cantidad</b><div class="muted">Las cantidades solo se comparan entre artículos de la misma unidad: elige cuál.</div><div class="chips" style="margin-top:6px">${unis.map(u=>chip('anuni','u',u,ucap(u,2),u===uni)).join('')}</div>${rankRows(A,B,'qty',filtQ,an.nrk,0)}</div>`;
+  const rkQ=`<div class="card"><b>Top ${an.nrk} ${MM?'merma ':''}por cantidad</b><div class="muted">Las cantidades solo se comparan entre artículos de la misma unidad: elige cuál.</div><div class="chips" style="margin-top:6px">${unis.map(u=>chip('anuni','u',u,ucap(u,2),u===uni)).join('')}</div>${rankRows(A,B,'qty',filtQ,an.nrk,0)}</div>`;
   const sel=an.art&&A.pc.get(an.art);
   const opts=[...A.pc.values()].sort((a,b)=>(a.p?a.p.descripcion:'').localeCompare(b.p?b.p.descripcion:'','es')).map(o=>`<option value="${esc(o.p?o.p.descripcion:o.codigo)}">`).join('');
   let art=`<div class="card" id="anart"><b>Evolución de un artículo</b><div class="muted">Toca un artículo de los rankings, o búscalo aquí.</div><div class="row" style="margin-top:6px"><input class="in grow" id="an_art" list="an_arts" placeholder="Escribe el nombre…" value="${sel?esc(sel.p?sel.p.descripcion:sel.codigo):''}"><datalist id="an_arts">${opts}</datalist><button class="btn sm" data-act="anart">Ver</button></div>`;
@@ -474,34 +531,77 @@ function vAnalisis(){
   }
   art+='</div>';
   const dcols=topF.slice(0,6);
-  const dd=`<div class="card scrollx"><b>Consumo por día y familia (€)</b><table><tr><th>Día</th>${dcols.map(c=>`<th><span class="dot" style="background:${colorOf(c)}"></span> ${esc(c)}</th>`).join('')}<th>Otras</th><th>Total</th></tr>${A.P.map(d=>{let rest=d.consumo;const cells=dcols.map(c=>{const v=(A.fam.get(c).byDay.get(d.fecha))||0;rest-=v;return `<td>${nf(v,0)}</td>`;}).join('');return `<tr><td>${fechaLarga(d.fecha)}</td>${cells}<td>${nf(rest,0)}</td><td><b>${nf(d.consumo,0)}</b></td></tr>`;}).join('')}</table></div>`;
-  const alertas=[];
-  for(const o of A.pc.values()){const arr=o.per.filter(x=>x.v>0);if(arr.length<3)continue;const pp=arr.map(x=>x.v/x.pax),med=median(pp);for(const x of arr){const ratio=(x.v/x.pax)/med,eurd=(x.v-med*x.pax)*x.cu;if((ratio>2||ratio<0.45)&&Math.abs(eurd)>=1)alertas.push({p:o.p,f:x.f,v:x.v,esp:med*x.pax,eurd});}}
-  alertas.sort((a,b)=>Math.abs(b.eurd)-Math.abs(a.eurd));
-  const neg=[];for(const d of A.P)for(const r of d.map.values())if(r.consumo<-1e-9)neg.push({f:d.fecha,p:r.p,v:r.consumo});
-  const topM=[...A.pc.values()].filter(x=>x.merE>0).sort((a,b)=>b.merE-a.merE).slice(0,8);
-  const extra=`${neg.length?`<div class="card"><b style="color:var(--bad)">⛔ Consumos negativos (${neg.length})</b>${neg.map(n=>`<div class="muted">${fechaLarga(n.f)} · ${esc(n.p?n.p.descripcion:'')} · ${q3(n.v)}</div>`).join('')}</div>`:''}
-  <div class="card"><b>⚠️ Alertas de consumo por pax (${alertas.length})</b><div class="muted">Un día se desvía &gt;2× o &lt;0,45× de la mediana del propio artículo (≥ 1 €)</div>${alertas.slice(0,15).map(a=>`<div class="mv"><span class="grow">${fechaLarga(a.f)} · <b>${esc(a.p?a.p.descripcion:'')}</b></span><span class="muted">${q3(a.v)} vs ~${q3(a.esp)}</span><span class="tag ${a.eurd>0?'r':'w'}">${a.eurd>0?'+':''}${nf(a.eurd,1)} €</span></div>`).join('')||'<div class="muted">Sin alertas 👌</div>'}</div>
-  <div class="card"><b>Mayor merma</b><table>${topM.map(o=>`<tr><td>${esc(o.p?o.p.descripcion:'')}</td><td>${q3(o.mer)} ${ulp(o.uni,o.mer)}</td><td><b>${eur(o.merE)}</b></td></tr>`).join('')||'<tr><td class="muted">Sin merma registrada</td></tr>'}</table></div>`;
+  const dd=`<div class="card scrollx"><b>${MM?'Merma por día y familia (€)':'Consumo por día y familia (€)'}</b><table><tr><th>Día</th>${dcols.map(c=>`<th><span class="dot" style="background:${colorOf(c)}"></span> ${esc(c)}</th>`).join('')}<th>Otras</th><th>Total</th></tr>${A.P.map(d=>{let rest=d.consumo;const cells=dcols.map(c=>{const v=(A.fam.get(c).byDay.get(d.fecha))||0;rest-=v;return `<td>${nf(v,0)}</td>`;}).join('');return `<tr><td>${fechaLarga(d.fecha)}</td>${cells}<td>${nf(rest,0)}</td><td><b>${nf(d.consumo,0)}</b></td></tr>`;}).join('')}</table></div>`;
   return css+ctrl+kp+dia+fams+rkE+rkQ+art+dd+tabla;
+}
+
+// ---------- MODELO APRENDIDO (rango normal por artículo en función de los PAX) ----------
+const qtl=(a,p)=>{if(!a.length)return 0;const v=[...a].sort((x,y)=>x-y),i=(v.length-1)*p,l=Math.floor(i),h=Math.ceil(i);return v[l]+(v[h]-v[l])*(i-l);};
+const predict=(f,pax)=>Math.max(0,f.a+f.b*pax);
+function fitLine(obs,key){
+  // Ajuste robusto (mediana, insensible a días raros). Proporcional a los PAX; si hay base fija (p. ej. bandejas mínimas) usa recta Theil-Sen.
+  const rm=median(obs.map(o=>o[key]/o.pax));
+  const prop={a:0,b:rm,kind:'prop',sd:1.4826*median(obs.map(o=>Math.abs(o[key]-rm*o.pax)))};
+  const px=obs.map(o=>o.pax);
+  if(obs.length>=10&&Math.max(...px)/Math.max(1,Math.min(...px))>=1.25){
+    const use=obs.slice(-120),sl=[];
+    for(let i=0;i<use.length;i++)for(let j=i+1;j<use.length;j++){const dx=use[j].pax-use[i].pax;if(Math.abs(dx)>=5)sl.push((use[j][key]-use[i][key])/dx);}
+    if(sl.length>=10){const b=median(sl),a=median(obs.map(o=>o[key]-b*o.pax)),sd=1.4826*median(obs.map(o=>Math.abs(o[key]-a-b*o.pax)));
+      if(b>=0&&sd<0.85*prop.sd)return{a,b,sd,kind:'lin'};}
+  }
+  return prop;
+}
+function buildModel(data){
+  const days=data.dias.filter(d=>d.estado==='cerrado'&&d.pax>0).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  const mv=new Map(),ci=new Map(),grp=(M,x)=>{let a=M.get(x.fecha);if(!a)M.set(x.fecha,a=[]);a.push(x);};
+  data.movs.forEach(m=>grp(mv,m));data.cierres.forEach(c=>grp(ci,c));
+  const obs=new Map();
+  for(const d of days){const map=agg(mv.get(d.fecha)||[],ci.get(d.fecha)||[],S.prods);
+    for(const r of map.values()){if(!(r.sacado>0)||!r.cierre||S.avisos.get(d.fecha+'|'+r.codigo)==='error')continue;let a=obs.get(r.codigo);if(!a)obs.set(r.codigo,a=[]);a.push({f:d.fecha,pax:d.pax,cons:Math.max(0,r.consumo),sac:r.sacado,mer:r.M,cu:r.cu});}}
+  const art=new Map();
+  for(const[code,o0]of obs){const lp=o0[o0.length-1].cu,o=lp>0?o0.filter(x=>x.cu/lp>=0.55&&x.cu/lp<=1.8):o0;if(o.length<4)continue;
+    art.set(code,{n:o.length,cons:fitLine(o,'cons'),sac:fitLine(o,'sac'),merR:median(o.map(x=>x.mer/x.sac)),consPaxP75:qtl(o.map(x=>x.cons/x.pax),0.75),sacPaxMed:median(o.map(x=>x.sac/x.pax)),cu:o[o.length-1].cu});}
+  return{art,nDias:days.length,desde:days.length?days[0].fecha:null,hasta:days.length?days[days.length-1].fecha:null,avgPax:days.length?days.reduce((a,d)=>a+d.pax,0)/days.length:0};
+}
+async function loadAvisos(){try{const l=await DB.getAvisos();S.avisos=new Map(l.map(a=>[a.fecha+'|'+a.codigo,a.estado]));}catch(e){S.avisos=new Map();}}
+async function loadBase(){
+  if(S._baseP)return S._baseP;
+  S._baseP=(async()=>{try{await loadAvisos();const data=await DB.getRango('2025-01-01',today());S.base={t:Date.now(),m:buildModel(data)};}catch(e){S.base={t:Date.now(),m:null};}finally{S._baseP=null;}return S.base;})();
+  return S._baseP;
+}
+function sacHint(code){
+  const pax=S.day.dia&&S.day.dia.pax,b=S.base&&S.base.m,m=b&&b.art.get(code);
+  if(!m||m.n<8||!(pax>0))return null;
+  const pred=predict(m.sac,pax),sc=Math.max(m.sac.sd,0.12*pred,0.05);
+  return{pred,lo:Math.max(0,pred-2*sc),hi:pred+2*sc,hard:pred+3.5*sc,n:m.n,cons:predict(m.cons,pax)};
 }
 
 // ---------- ANÁLISIS DE CIERRE (alertas de calidad del dato) ----------
 function vControl(){
   if(!S.an||!S.an.data){loadAnalisis().then(render).catch(e=>toast(e.message,true));return '<div class="card muted">Cargando…</div>';}
-  const an=S.an,A=analiza(an.data),data=an.data;
+  if(!S.base){loadBase().then(()=>render(true));return '<div class="card muted">Cargando el histórico…</div>';}
+  const MOD=S.base.m;
+  const an=S.an,A=analiza(an.data,'cons'),data=an.data;
   const chip=(act,attr,val,label)=>`<button class="chip" data-act="${act}" data-${attr}="${esc(val)}">${label}</button>`;
   const ctrl=`<h3 style="margin:4px 4px 8px">Análisis de cierre</h3><div class="card"><div class="muted" style="margin-bottom:6px">Revisa si alguna cantidad se imputó mal o si el conteo no tiene sentido. Cada aviso tiene un botón para abrir ese día y corregirlo.</div><div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="an_d" value="${an.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="an_h" value="${an.hasta}"></div></div><div class="chips" style="margin-top:8px">${[['7','Últimos 7 días'],['30','Últimos 30 días'],['mes','Este mes'],['mesant','Mes anterior'],['todo','Todo']].map(x=>chip('anq','q',x[0],x[1])).join('')}</div><div style="margin-top:8px"><button class="btn sm" data-act="anload" style="width:100%">Ver periodo</button></div></div>`;
   const css=`<style>.al{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line)}.al .grow b{display:block}.sev{font-size:11px;border-radius:8px;padding:3px 7px;white-space:nowrap;color:#fff}.sev.h{background:#c0392b}.sev.m{background:#d98a1c}.sev.l{background:#6b7686}.acard summary{cursor:pointer;font-weight:700}.acard .muted{font-size:12px}</style>`;
   if(!A.P.length)return css+ctrl+'<div class="card muted">No hay días con consumos en este periodo.</div>';
   const P=A.P,desc=o=>esc(o&&o.p?o.p.descripcion:(o&&o.codigo)||'');
+  const canRev=isAdmin()||(S.user&&S.user.rol==='chef');
   const btn=f=>`<button class="btn ghost sm" data-act="irdia" data-f="${f}">Ver día</button>`;
   const G=[];
   const neg=[];for(const d of P)for(const r of d.map.values())if(r.consumo<-1e-9)neg.push({f:d.fecha,r,eur:r.consumo*r.cu});
   G.push({t:'⛔ Consumo negativo',h:'Aprovechado + merma es mayor que lo que se sacó. Casi seguro hay un error de conteo.',sev:'h',n:neg.length,rows:neg.sort((a,b)=>a.eur-b.eur).map(x=>({f:x.f,t:desc(x.r),d:`Sacado ${q3(x.r.sacado)} · aprovechado ${q3(x.r.A)} · merma ${q3(x.r.M)} ${ulp(x.r.p?x.r.p.unidad_conteo:'',x.r.sacado)}`,e:x.eur}))});
   const dev=[];
-  for(const o of A.pc.values()){const arr=o.per.filter(x=>x.v>0);if(arr.length<3)continue;const pp=arr.map(x=>x.v/x.pax),med=median(pp);for(const x of arr){const ratio=(x.v/x.pax)/med,eurd=(x.v-med*x.pax)*x.cu;if((ratio>2||ratio<0.45)&&Math.abs(eurd)>=1)dev.push({f:x.f,t:esc(o.p?o.p.descripcion:o.codigo),d:`${q3(x.v)} ${ulp(o.uni,x.v)} vs ~${q3(med*x.pax)} esperados (${nf(ratio,1)}×)`,e:eurd});}}
-  G.push({t:'⚠️ Consumo por pax fuera de lo normal',h:'Un día se desvía más de 2× o menos de 0,45× de la mediana del propio artículo (impacto ≥ 1 €). Puede ser un olvido de reposición, un decimal mal puesto o un cambio real.',sev:'m',n:dev.length,rows:dev.sort((a,b)=>Math.abs(b.e)-Math.abs(a.e))});
+  for(const d of P)for(const r of d.map.values()){
+    if(!(r.sacado>0))continue;const m=MOD&&MOD.art.get(r.codigo);
+    if(m&&m.n>=8){if(m.cu>0&&(r.cu/m.cu<0.55||r.cu/m.cu>1.8))continue;const pred=predict(m.cons,d.pax),sc=Math.max(m.cons.sd,0.12*pred,0.05),z=(r.consumo-pred)/sc,eurd=(r.consumo-pred)*r.cu;
+      if(Math.abs(z)>4.5&&Math.abs(eurd)>=3&&!S.avisos.get(d.fecha+'|'+r.codigo))dev.push({f:d.fecha,cod:r.codigo,t:desc(r),d:`${q3(r.consumo)} ${ulp(r.p?r.p.unidad_conteo:'',r.consumo)} vs ~${q3(pred)} esperados (normal: ${q3(Math.max(0,pred-3*sc))}–${q3(pred+3*sc)}) · aprendido de ${m.n} días`,e:eurd});}
+  }
+  for(const o of A.pc.values()){const m=MOD&&MOD.art.get(o.codigo);if(m&&m.n>=8)continue;const arr=o.per.filter(x=>x.v>0);if(arr.length<3)continue;const pp=arr.map(x=>x.v/x.pax),med=median(pp);for(const x of arr){const ratio=(x.v/x.pax)/med,eurd=(x.v-med*x.pax)*x.cu;if((ratio>2||ratio<0.45)&&Math.abs(eurd)>=1&&!S.avisos.get(x.f+'|'+o.codigo))dev.push({f:x.f,cod:o.codigo,t:esc(o.p?o.p.descripcion:o.codigo),d:`${q3(x.v)} ${ulp(o.uni,x.v)} vs ~${q3(med*x.pax)} esperados (${nf(ratio,1)}×) · pocos datos, regla general`,e:eurd});}}
+  G.push({t:'⚠️ Consumo fuera de lo normal para los PAX del día',h:'Compara cada artículo con su propio rango normal, aprendido de los días cerrados según el nº de PAX (solo se avisa si se sale por mucho y supone ≥ 3 €; los avisos se ordenan por euros). Pulsa «✔ Normal» si ese día era lógico (no vuelve a avisar) o «✖ Error» si el dato estaba mal metido (además se excluye del aprendizaje). Los artículos con pocos días usan una regla general más burda.',sev:'m',n:dev.length,rows:dev.sort((a,b)=>Math.abs(b.e)-Math.abs(a.e))});
+  const jmp=[];for(const o of A.pc.values()){const per=o.per;for(let i=1;i<per.length;i++){const a=per[i-1].cu,b=per[i].cu;if(a>0&&b>0&&(b/a>=1.8||b/a<=0.55))jmp.push({f:per[i].f,t:esc(o.p?o.p.descripcion:o.codigo),d:`El coste por unidad pasó de ${nf(a,3)} € a ${nf(b,3)} € (${nf(b/a,2)}×). ¿Cambió la unidad en la que se cuenta o el formato? Si no, los consumos antes y después no son comparables.`,e:0});}}
+  G.push({t:'🔁 Salto de precio o unidad',h:'El coste por unidad de un artículo cambió de golpe (≥ 1,8×). Suele ser que se contó en otra unidad (caja, unidades, docenas…) y rompe las comparaciones. El modelo ya usa solo el último formato de cada artículo.',sev:'m',n:jmp.length,rows:jmp.sort((a,b)=>b.f.localeCompare(a.f))});
   const byA=new Map();for(const m of data.movs){if(m.anulado)continue;const k=m.codigo+'|'+m.tipo;(byA.get(k)||byA.set(k,[]).get(k)).push(m);}
   const atip=[];
   for(const [k,arr] of byA){if(arr.length<4)continue;const med=median(arr.map(m=>+m.cantidad));if(med<=0)continue;for(const m of arr){const q=+m.cantidad;if(q>4*med){const p=S.prods.get(m.codigo),c=(p?cu(p):0);const e=(q-med)*c;if(e>=2)atip.push({f:m.fecha,t:esc(p?p.descripcion:m.codigo),d:`${m.tipo==='expuesto'?'Expuesto':'Reposición'}: ${q3(q)} ${ulp(p?p.unidad_conteo:'',q)} (lo habitual ~${q3(med)})${m.usuario?' · '+esc(m.usuario):''}`,e});}}}
@@ -518,8 +618,15 @@ function vControl(){
   const alt=G.reduce((a,g)=>a+(g.sev==='h'?g.n:0),0),tot=G.reduce((a,g)=>a+g.n,0);
   const resumen=`<div class="kpis"><div class="kpi"><b>${P.length}</b><span>Días revisados</span></div><div class="kpi"><b style="color:${alt?'#c0392b':'#1f8a5b'}">${alt}</b><span>Errores probables</span></div><div class="kpi"><b>${tot}</b><span>Avisos en total</span></div></div>`;
   const sevL={h:'Probable error',m:'Revisar',l:'Informativo'};
-  const cards=G.map(g=>`<details class="card acard" ${g.n&&g.sev!=='l'?'open':''}><summary>${g.t} (${g.n}) <span class="sev ${g.sev}">${sevL[g.sev]}</span></summary><div class="muted" style="margin:4px 0">${g.h}</div>${g.rows.slice(0,25).map(x=>`<div class="al"><div class="grow"><b>${x.t}</b><span class="muted">${fechaLarga(x.f)} · ${x.d}</span></div>${x.e?`<span class="tag ${x.e>0?'r':'w'}">${x.e>0?'+':''}${nf(x.e,1)} €</span>`:''}${btn(x.f)}</div>`).join('')||'<div class="muted">Sin avisos 👌</div>'}${g.rows.length>25?`<div class="muted">Mostrando 25 de ${g.rows.length}.</div>`:''}</details>`).join('');
-  return css+ctrl+resumen+cards;
+  const cards=G.map(g=>`<details class="card acard" ${g.n&&g.sev!=='l'?'open':''}><summary>${g.t} (${g.n}) <span class="sev ${g.sev}">${sevL[g.sev]}</span></summary><div class="muted" style="margin:4px 0">${g.h}</div>${g.rows.slice(0,25).map(x=>`<div class="al"><div class="grow"><b>${x.t}</b><span class="muted">${fechaLarga(x.f)} · ${x.d}</span></div>${x.e?`<span class="tag ${x.e>0?'r':'w'}">${x.e>0?'+':''}${nf(x.e,1)} €</span>`:''}${btn(x.f)}${x.cod&&canRev?`<button class="btn ghost sm" data-act="aviso" data-f="${x.f}" data-c="${esc(x.cod)}" data-s="normal" title="Era normal: no volver a avisar">✔ Normal</button><button class="btn bad sm" data-act="aviso" data-f="${x.f}" data-c="${esc(x.cod)}" data-s="error" title="Dato mal metido: excluir del aprendizaje">✖ Error</button>`:''}</div>`).join('')||'<div class="muted">Sin avisos 👌</div>'}${g.rows.length>25?`<div class="muted">Mostrando 25 de ${g.rows.length}.</div>`:''}</details>`).join('');
+  const nL=MOD?[...MOD.art.values()].filter(m=>m.n>=8).length:0,nA=MOD?MOD.art.size:0;
+  const learn=MOD?`<div class="card"><b>🧠 Qué ha aprendido la app</b><div class="muted" style="margin-top:4px">${MOD.nDias?`Aprende de <b>${MOD.nDias}</b> días cerrados (${ddmm(MOD.desde)}/${MOD.desde.slice(0,4)} – ${ddmm(MOD.hasta)}/${MOD.hasta.slice(0,4)}). <b>${nL}</b> artículos ya tienen su rango normal propio según los PAX; <b>${nA-nL}</b> siguen aprendiendo (necesitan 8 días con uso). Cuantos más días cerrados, más afinados los avisos.${S.avisos.size?` Has revisado <b>${S.avisos.size}</b> avisos (${[...S.avisos.values()].filter(v=>v==='error').length} marcados como error y excluidos del aprendizaje).`:''}${S._avisosLocal&&S.avisos.size?' <b>Ojo:</b> tus revisiones solo se guardan en este dispositivo hasta que se cree la tabla «avisos» en Supabase.':''}`:'Todavía no hay días cerrados de los que aprender: los avisos usan una regla general.'}</div></div>`:'';
+  const aj=[];
+  if(MOD)for(const[code,m]of MOD.art){if(m.n<8)continue;const p=S.prods.get(code);if(!p||p.activo===false)continue;const sug=m.consPaxP75*1.1,cur=m.sacPaxMed;
+    if(cur>sug*1.2&&m.merR>0.12){const px=MOD.avgPax,ah=(cur-sug)*px*m.cu;if(ah>=0.5)aj.push({t:esc(p.descripcion),d:`Sacas ~${q3(cur*px)} ${ulp(p.unidad_conteo,cur*px)} para ${nf(px,0)} pax y se consumen ~${q3(m.consPaxP75*px)} (merma típica ${nf(m.merR*100,0)} %). Prueba con ~${q3(sug*px)}.`,e:ah});}}
+  aj.sort((a,b)=>b.e-a.e);
+  const ajust=`<details class="card acard" ${aj.length?'open':''}><summary>🎯 Afinar cantidades (${aj.length}) <span class="sev l">Oportunidad</span></summary><div class="muted" style="margin:4px 0">Artículos que se sacan de forma sistemática por encima de lo que se consume (merma típica &gt; 12 %). Ahorro estimado por día con la media de PAX.</div>${aj.slice(0,15).map(x=>`<div class="al"><div class="grow"><b>${x.t}</b><span class="muted">${x.d}</span></div><span class="tag g">−${nf(x.e,1)} €/día</span></div>`).join('')||'<div class="muted">Aún no hay histórico suficiente para sugerir ajustes.</div>'}${aj.length>15?`<div class="muted">Mostrando 15 de ${aj.length}.</div>`:''}</details>`;
+  return css+ctrl+resumen+learn+cards+ajust;
 }
 
 /* ---------- CATÁLOGO ---------- */
@@ -528,6 +635,7 @@ function vCatalogo(){
   let l=prodList();if(S.cfilt==='rev')l=l.filter(p=>p.nuevo||p.revisar);if(q)l=l.filter(p=>(p.descripcion+p.codigo+(p.categoria||'')).toLowerCase().includes(q));
   l.sort((a,b)=>a.descripcion.localeCompare(b.descripcion,'es'));
   return `<div class="card"><div class="row"><button class="btn sm grow" data-act="cargaxls">📥 Cargar Excel de precios</button><button class="btn ghost sm grow" data-act="bajaxls">📤 Descargar catálogo</button></div><input type="file" id="xls" accept=".xlsx,.xls,.csv" class="hidden">
+  ${isAdmin()?'<button class="btn ghost sm" data-act="imphist" style="width:100%;margin-top:8px">📚 Importar histórico de escandallos (.json)</button><input type="file" id="hjson" accept=".json" class="hidden">':''}
   <div class="row" style="margin-top:8px"><input class="in grow" id="cq" placeholder="Buscar…" value="${esc(S.cq||'')}"><button class="btn ghost sm" data-act="crev">${S.cfilt==='rev'?'Ver todos':`A revisar (${nuevos})`}</button></div></div>
   <div class="muted" style="margin:0 4px 6px">${l.length} artículos · el coste por unidad = precio de compra ÷ factor</div>
   ${l.slice(0,200).map(p=>`<button class="item" data-act="editp" data-c="${esc(p.codigo)}"><div class="n"><b>${esc(p.descripcion)}</b><span>${esc(p.codigo)} · ${esc(p.categoria||'')} · compra ${eur(p.precio_compra)}/${ul(p.unidad_compra)}${p.factor!=1?' · 1 '+ul(p.unidad_compra)+' = '+p.factor+' '+ulp(p.unidad_conteo,p.factor):''}</span></div><span class="tag">${eur(cu(p))}/${ul(p.unidad_conteo)}</span>${p.nuevo?'<span class="tag w">NUEVO</span>':p.revisar?'<span class="tag r">revisar</span>':''}${p.activo===false?'<span class="tag">oculto</span>':''}</button>`).join('')}
@@ -556,9 +664,45 @@ async function saveP(code){
   if(old&&(old.precio_compra!==precio||old.factor!==factor)&&!confirm(`Precio: ${eur(cu(old))} → ${eur(precio/factor)} por ${ul(p.unidad_conteo)}.\nLos días ya cerrados mantienen su precio. ¿Guardar?`))return;
   try{await DB.upsertProductos([p],S.user.nombre);S.prods.set(p.codigo,p);closeSheet();render(true);toast('Guardado');}catch(e){toast(e.message,true);}
 }
+async function procesarHist(file){
+  const j=JSON.parse(await file.text());const dias=(j.dias||[]).filter(d=>d.fecha&&d.items&&d.items.length).sort((a,b)=>a.fecha.localeCompare(b.fecha));
+  if(!dias.length)return toast('El fichero no trae días',true);
+  const byDesc=new Map(prodList().map(p=>[p.descripcion.trim().toUpperCase(),p.codigo]));
+  const map={},nuevos=[];let porNombre=0,enCat=0;
+  for(const p of j.productos||[]){if(S.prods.has(p.codigo)){map[p.codigo]=p.codigo;enCat++;continue;}const c2=byDesc.get((p.descripcion||'').trim().toUpperCase());if(c2){map[p.codigo]=c2;porNombre++;continue;}map[p.codigo]=p.codigo;nuevos.push(p);}
+  const ex=await DB.getRango(dias[0].fecha,dias[dias.length-1].fecha);const hay=new Set([...ex.dias.map(d=>d.fecha),...ex.movs.map(m=>m.fecha),...ex.cierres.map(c=>c.fecha)]);
+  const hacer=dias.filter(d=>!hay.has(d.fecha)),salta=dias.filter(d=>hay.has(d.fecha));
+  window._hist={dias:hacer,map,nuevos};
+  const movs=hacer.reduce((a,d)=>a+d.items.length,0);
+  sheet(`<h3>Importar histórico</h3><div class="muted">Se guardan como <b>días cerrados</b> con su PAX y el precio de cada día. Nada se borra ni se pisa.</div>
+  <div class="kpis" style="margin-top:10px"><div class="kpi"><b>${hacer.length}</b><span>días a importar${hacer.length?` (${ddmm(hacer[0].fecha)}–${ddmm(hacer[hacer.length-1].fecha)})`:''}</span></div><div class="kpi"><b>${salta.length}</b><span>días que ya existen (se saltan)</span></div><div class="kpi"><b>${movs}</b><span>líneas artículo-día</span></div><div class="kpi"><b>${nuevos.length}</b><span>artículos que no están en el catálogo (se crean ocultos y «a revisar»)</span></div></div>
+  <div class="muted">Artículos ya en el catálogo: ${enCat}${porNombre?` · emparejados por nombre: ${porNombre}`:''}.</div>
+  <div class="row" style="margin-top:14px"><button class="btn ghost grow" data-act="closesheet">Cancelar</button><button class="btn grow" data-act="aplicarhist" ${hacer.length?'':'disabled'}>Importar ${hacer.length} días</button></div><div id="hprog" class="muted" style="margin-top:8px"></div>`);
+}
+async function aplicarHist(){
+  const{dias,map,nuevos}=window._hist;const U='IMPORT HISTÓRICO',pg=$('#hprog');let ok=0;
+  document.querySelectorAll('.sheet [data-act]').forEach(x=>x.disabled=true);
+  try{
+    if(nuevos.length){const list=nuevos.map(p=>({codigo:p.codigo,descripcion:p.descripcion,categoria:p.categoria||'Otros',unidad_compra:(p.unidad_conteo||'UT').toUpperCase(),precio_compra:p.precio||0,factor:1,unidad_conteo:(p.unidad_conteo||'UT').toUpperCase(),activo:false,nuevo:true,revisar:'Creado al importar el histórico: confirmar unidad y precio'}));await DB.upsertProductos(list,U);list.forEach(p=>S.prods.set(p.codigo,p));}
+    for(const d of dias){
+      pg.textContent=`Importando ${fechaLarga(d.fecha)} (${ok+1}/${dias.length})…`;
+      const ts=new Date(d.fecha+'T08:00:00').toISOString(),by=new Map();
+      for(const it of d.items){const c=map[it.c]||it.c;let a=by.get(c);if(!a){a={E:0,R:0,A:0,M:0,p:it.p};by.set(c,a);}a.E+=it.E;a.R+=it.R;a.A+=it.A;a.M+=it.M;}
+      const mv=[],ci=[];
+      for(const[c,a]of by){if(!(a.E+a.R>0))continue;
+        if(a.E>0)mv.push({id:nid(),fecha:d.fecha,codigo:c,tipo:'expuesto',cantidad:round(a.E),origen:'manual',usuario:U,ts,anulado:false});
+        if(a.R>0)mv.push({id:nid(),fecha:d.fecha,codigo:c,tipo:'reposicion',cantidad:round(a.R),origen:'manual',usuario:U,ts,anulado:false});
+        ci.push({fecha:d.fecha,codigo:c,aprovechamiento:round(a.A),merma:round(a.M),reutiliza:false,coste_unit:round(a.p,5),usuario:U,ts});}
+      try{await DB.addMovs(mv);await DB.saveCierres(ci);await DB.setPax(d.fecha,d.pax,true);await DB.cerrarDia(d.fecha,U);}
+      catch(e){try{await DB.delDia(d.fecha);}catch(_){}throw new Error(`${fechaLarga(d.fecha)}: ${e.message}`);}
+      ok++;
+    }
+    closeSheet();S.an.data=null;S.base=null;await loadDay(true);render();loadBase().catch(()=>{});toast(`Histórico importado: ${ok} días cerrados`);
+  }catch(e){pg.innerHTML=`<b style="color:#c62828">Se detuvo tras ${ok} días: ${esc(e.message)}</b><br>Lo importado hasta ahí se mantiene; vuelve a pulsar importar y se saltarán los días ya cargados.`;document.querySelectorAll('.sheet [data-act]').forEach(x=>x.disabled=false);S.an.data=null;S.base=null;}
+}
 async function procesarExcel(file){
   const X=await loadXLSX();const wb=X.read(await file.arrayBuffer(),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=X.utils.sheet_to_json(ws,{defval:''});
-  const norm=s=>String(s).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g,'').replace(/[^a-z]/g,'');
+  const norm=s=>String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/g,'');
   const get=(r,...ks)=>{for(const k of Object.keys(r)){if(ks.includes(norm(k)))return r[k];}return '';};
   const nuevos=[],cambios=[],iguales=[],errores=[];const seen=new Set();
   rows.forEach((r,i)=>{
@@ -659,15 +803,19 @@ document.addEventListener('click',async e=>{
   else if(a==='closesheet'){closeSheet();render(true);}
   else if(a==='nuevo')openNuevo();
   else if(a==='savenuevo')saveNuevo();
-  else if(a==='pax'){sheet('<h3>PAX del día</h3><div class="muted">Comensales de desayuno</div><label class="f">PAX</label><input class="in qtyin" id="paxin" inputmode="numeric" value="'+(S.day.dia&&S.day.dia.pax!=null?S.day.dia.pax:'')+'"><div class="row" style="margin-top:14px"><button class="btn ghost grow" data-act="closesheet">Cancelar</button><button class="btn grow" data-act="savepax">Guardar</button></div>');setTimeout(()=>{const i=$('#paxin');if(i)i.focus();},60);}
-  else if(a==='savepax'){const n=parseInt($('#paxin').value,10);if(!(n>0&&n<5000))return toast('PAX no válido',true);await DB.setPax(S.fecha,n);closeSheet();await loadDay(true);render(true);toast('PAX guardado');}
+  else if(a==='pax')openPax();
+  else if(a==='savepax')await savePax();
+  else if(a==='deldia')await delDiaFlow();
+  else if(a==='adminpax'){S.fecha=b.dataset.f;S.cierreEdit={};await loadDay(true);openPax();}
+  else if(a==='admindel'){S.fecha=b.dataset.f;S.cierreEdit={};await loadDay(true);await delDiaFlow();}
+  else if(a==='anmode'){S.an.mode=b.dataset.m;render(true);}
   else if(a==='arrastre'){const items=S.prev.cierres.filter(c=>c.reutiliza&&+c.aprovechamiento>0);for(const c of items){const m={id:nid(),fecha:S.fecha,codigo:c.codigo,tipo:'expuesto',cantidad:+c.aprovechamiento,origen:'arrastre',usuario:S.user.nombre,ts:new Date().toISOString(),anulado:false};await DB.addMov(m);S.day.movs.push(m);}S.vista='usados';render();toast(items.length+' sobrantes cargados como expuesto');}
   else if(a==='reut'){const c=b.dataset.c;S.cierreEdit[c]={...(S.cierreEdit[c]||{}),R:b.dataset.v};syncEdit(c);render(true);}
   else if(a==='todoconsumido'){confCierre(b.dataset.c,true);}
   else if(a==='confcierre'){confCierre(b.dataset.c,false);}
   else if(a==='cedit'){const r=agg(S.day.movs,S.day.cierres,S.prods).get(b.dataset.c);S.cierreEdit[b.dataset.c]={A:String(r.A),M:String(r.M),R:r.A>0?(r.reut?'si':'no'):''};render(true);}
-  else if(a==='cerrardia'){const items=cierreItems();const tot=totales(agg(S.day.movs,S.day.cierres,S.prods));const pax=S.day.dia.pax;if(confirm(`Cerrar ${fechaLarga(S.fecha)}?\n\nPAX: ${pax}\nCoste consumo: ${eur(tot.consumo)}\nCoste/pax: ${eur(tot.consumo/pax)}\nMerma: ${eur(tot.merma)}\n\nTras cerrar no se podrá modificar (solo un admin puede reabrir).`)){await DB.cerrarDia(S.fecha,S.user.nombre);await loadDay(true);render();toast('Día cerrado ✔');}}
-  else if(a==='reabrir'){if(confirm('¿Reabrir el día?')){await DB.reabrirDia(S.fecha);await loadDay(true);render();}}
+  else if(a==='cerrardia'){const items=cierreItems();const tot=totales(agg(S.day.movs,S.day.cierres,S.prods));const pax=S.day.dia.pax;if(confirm(`Cerrar ${fechaLarga(S.fecha)}?\n\nPAX: ${pax}\nCoste consumo: ${eur(tot.consumo)}\nCoste/pax: ${eur(tot.consumo/pax)}\nMerma: ${eur(tot.merma)}\n\nTras cerrar no se podrá modificar (solo un admin puede reabrir).`)){await DB.cerrarDia(S.fecha,S.user.nombre);S.base=null;loadBase().catch(()=>{});await loadDay(true);render();toast('Día cerrado ✔');}}
+  else if(a==='reabrir'){if(confirm('¿Reabrir el día?')){await DB.reabrirDia(S.fecha);S.base=null;loadBase().catch(()=>{});await loadDay(true);render();}}
     else if(a==='anload'||a==='anq'||a==='ancmp'){
     const g=id=>{const e=$('#'+id);return e&&e.value?e.value:null;};
     if(g('an_d'))S.an.desde=g('an_d');if(g('an_h'))S.an.hasta=g('an_h');if(g('an_cd'))S.an.cdesde=g('an_cd');if(g('an_ch'))S.an.chasta=g('an_ch');
@@ -686,7 +834,10 @@ document.addEventListener('click',async e=>{
   else if(a==='anfam'){const f=b.dataset.f;S.an.fam=(!f||S.an.fam===f)?'Todas':f;render(true);}
   else if(a==='annrk'){S.an.nrk=+b.dataset.n;render(true);}
   else if(a==='anuni'){S.an.uni=b.dataset.u;render(true);}
-  else if(a==='anart'){let c=b.dataset.c;if(!c){const v=(($('#an_art')||{}).value||'').trim().toLowerCase();const L=[...analiza(S.an.data).pc.values()];const o=L.find(x=>x.p&&x.p.descripcion.toLowerCase()===v)||(v&&L.find(x=>x.p&&x.p.descripcion.toLowerCase().includes(v)));if(!o)return toast('Artículo no encontrado en el periodo',true);c=o.codigo;}S.an.art=c;render(true);setTimeout(()=>{const e=$('#anart');if(e)e.scrollIntoView({behavior:'smooth'});},60);}
+  else if(a==='anart'){let c=b.dataset.c;if(!c){const v=(($('#an_art')||{}).value||'').trim().toLowerCase();const L=[...analiza(S.an.data,S.an.mode).pc.values()];const o=L.find(x=>x.p&&x.p.descripcion.toLowerCase()===v)||(v&&L.find(x=>x.p&&x.p.descripcion.toLowerCase().includes(v)));if(!o)return toast('Artículo no encontrado en el periodo',true);c=o.codigo;}S.an.art=c;render(true);setTimeout(()=>{const e=$('#anart');if(e)e.scrollIntoView({behavior:'smooth'});},60);}
+  else if(a==='aviso'){const f=b.dataset.f,c=b.dataset.c,st=b.dataset.s;await DB.setAviso({fecha:f,codigo:c,estado:st,usuario:S.user.nombre,ts:new Date().toISOString()});S.avisos.set(f+'|'+c,st);if(st==='error'){S.base=null;loadBase().then(()=>render(true));}render(true);toast(st==='normal'?'Marcado como normal: no volverá a avisar':'Marcado como error: se excluye del aprendizaje');}
+  else if(a==='imphist')$('#hjson').click();
+  else if(a==='aplicarhist')await aplicarHist();
   else if(a==='cargaxls')$('#xls').click();
   else if(a==='bajaxls')bajaXLS();
   else if(a==='crev'){S.cfilt=S.cfilt==='rev'?'':'rev';render();}
@@ -701,12 +852,15 @@ function syncEdit(c){const card=document.querySelector(`[data-cc="${CSS.escape(c
 document.addEventListener('input',e=>{
   const t=e.target;
   if(t.id==='q'){S.q=t.value;S._focusQ=true;clearTimeout(S._qt);S._qt=setTimeout(render,120);}
+  else if(t.id==='n_p'){hintNuevo();}
   else if(t.id==='cq'){S.cq=t.value;clearTimeout(S._qt);S._qt=setTimeout(()=>{render();const x=$('#cq');x.focus();x.setSelectionRange(x.value.length,x.value.length);},150);}
   else if(t.dataset&&t.dataset.f){const card=t.closest('[data-cc]');const c=card.dataset.cc;const ed=S.cierreEdit[c]||{};ed[t.dataset.f]=t.value;S.cierreEdit[c]=ed;S.cierreEdit._typing=true;const a=parseNum(ed.A);const rr=document.getElementById('reut_'+c);if(rr)rr.classList.toggle('hidden',!(a>0));}
 });
 document.addEventListener('change',async e=>{
   const t=e.target;
-  if(t.id==='fecha'){S.fecha=t.value||today();S.cierreEdit={};await loadDay();render();}
+  if(t.id==='n_u'||t.id==='n_p'){hintNuevo();}
+  else if(t.id==='fecha'){S.fecha=t.value||today();S.cierreEdit={};await loadDay();render();}
+  else if(t.id==='hjson'&&t.files[0]){try{await procesarHist(t.files[0]);}catch(er){toast('Fichero no válido: '+er.message,true);}t.value='';}
   else if(t.id==='xls'&&t.files[0]){try{await procesarExcel(t.files[0]);}catch(er){toast(er.message,true);}t.value='';}
 });
 document.addEventListener('focusout',e=>{if(e.target.dataset&&e.target.dataset.f)setTimeout(()=>{S.cierreEdit._typing=false;},300);});
