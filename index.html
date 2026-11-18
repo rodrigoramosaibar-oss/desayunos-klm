@@ -152,7 +152,7 @@ const DB=CLOUD?CloudStore:LocalStore;
 ============================================================ */
 const S={user:null,fecha:today(),prods:new Map(),day:{dia:null,movs:[],cierres:[]},prev:null,hist:null,tab:'captura',q:'',cat:'Todas',vista:'usados',draft:{},cierreEdit:{},busy:false,
   an:{desde:null,hasta:null,data:null},ex:{desde:null,hasta:null}};
-const ROLES={admin:['captura','cierre','analisis','catalogo','exportar'],cocina:['captura','cierre'],ventas:['analisis']};
+const ROLES={admin:['captura','cierre','analisis','control','catalogo','exportar'],cocina:['captura','cierre'],ventas:['analisis']};
 const isClosed=()=>S.day.dia&&S.day.dia.estado==='cerrado';
 const canWrite=()=>S.user&&['admin','cocina'].includes(S.user.rol)&&!isClosed();
 const prodList=()=>[...S.prods.values()];
@@ -209,8 +209,8 @@ function render(keepScroll){
    <button class="pill" style="border:0;color:#fff" data-act="logout">Salir</button></div>
    ${['captura','cierre'].includes(S.tab)?`<div class="hrow" style="margin-top:8px"><input type="date" class="date" id="fecha" value="${S.fecha}"><span class="pill">PAX <b id="paxv">${S.day.dia&&S.day.dia.pax!=null?S.day.dia.pax:'—'}</b></span>${canWrite()?'<button class="pill" style="border:0;color:#fff" data-act="pax">Editar PAX</button>':''}</div>`:''}
    ${S.tab==='captura'?`<input class="search" id="q" placeholder="🔍 Buscar artículo…" value="${esc(S.q)}" autocomplete="off">`:''}</header>`;
-  const body=S.tab==='captura'?vCaptura():S.tab==='cierre'?vCierre():S.tab==='analisis'?vAnalisis():S.tab==='catalogo'?vCatalogo():vExportar();
-  const names={captura:['✏️','Captura'],cierre:['✅','Cierre'],analisis:['📊','Análisis'],catalogo:['📦','Catálogo'],exportar:['⬇️','Exportar']};
+  const body=S.tab==='captura'?vCaptura():S.tab==='cierre'?vCierre():S.tab==='analisis'?vAnalisis():S.tab==='control'?vControl():S.tab==='catalogo'?vCatalogo():vExportar();
+  const names={captura:['✏️','Captura'],cierre:['✅','Cierre'],analisis:['📊','Ventas'],control:['🔎','Alertas'],catalogo:['📦','Catálogo'],exportar:['⬇️','Exportar']};
   $('#app').innerHTML=head+`<main>${body}</main><nav class="bot">${tabs.map(t=>`<button class="${S.tab===t?'on':''}" data-act="tab" data-t="${t}"><i>${names[t][0]}</i>${names[t][1]}</button>`).join('')}</nav>`;
   if(keepScroll)window.scrollTo(0,y);
   const q=$('#q');if(q&&S._focusQ){q.focus();q.setSelectionRange(q.value.length,q.value.length);}
@@ -423,7 +423,7 @@ function rankRows(A,B,metric,filt,n,total){
 function vAnalisis(){
   if(!S.an.data){loadAnalisis().then(render).catch(e=>toast(e.message,true));return '<div class="card muted">Cargando…</div>';}
   const an=S.an,A=analiza(an.data),B=an.cdata?analiza(an.cdata):null,verProd=S.user.rol!=='ventas';
-  const css=`<style>.dl{font-size:11px;color:var(--mut)}.dl.ok{color:#1f8a5b}.dl.bad{color:#c0392b}.kpi small{display:block;margin-top:2px}.bar{height:7px;background:#eef1f6;border-radius:5px;margin:4px 0 2px;overflow:hidden}.bar i{display:block;height:100%;background:var(--navy);border-radius:5px}.bar i.cb{background:#b9c2d0;margin-top:2px;height:4px}.fam{padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer}.fam.on{background:#f3ecdc}.fr{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:3px;display:inline-block}.rk{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line);cursor:pointer}.rn{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}.rv{text-align:right;min-width:110px}.rv b{display:block}.scrollx{overflow-x:auto}.scrollx table{min-width:520px}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:4px}</style>`;
+  const css=`<h3 style="margin:4px 4px 8px">Análisis de ventas</h3><style>.dl{font-size:11px;color:var(--mut)}.dl.ok{color:#1f8a5b}.dl.bad{color:#c0392b}.kpi small{display:block;margin-top:2px}.bar{height:7px;background:#eef1f6;border-radius:5px;margin:4px 0 2px;overflow:hidden}.bar i{display:block;height:100%;background:var(--navy);border-radius:5px}.bar i.cb{background:#b9c2d0;margin-top:2px;height:4px}.fam{padding:9px 4px;border-bottom:1px solid var(--line);cursor:pointer}.fam.on{background:#f3ecdc}.fr{display:flex;gap:6px;align-items:baseline;flex-wrap:wrap}.dot{width:10px;height:10px;border-radius:3px;display:inline-block}.rk{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line);cursor:pointer}.rn{width:22px;height:22px;border-radius:50%;background:var(--navy);color:#fff;font-size:12px;display:flex;align-items:center;justify-content:center;flex:none;margin-top:1px}.rv{text-align:right;min-width:110px}.rv b{display:block}.scrollx{overflow-x:auto}.scrollx table{min-width:520px}.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--mut);margin-top:4px}</style>`;
   const chip=(act,attr,val,label,on)=>`<button class="chip ${on?'on':''}" data-act="${act}" data-${attr}="${esc(val)}">${label}</button>`;
   const ctrl=`<div class="card"><div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="an_d" value="${an.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="an_h" value="${an.hasta}"></div></div>
   <div class="chips" style="margin-top:8px">${[['7','Últimos 7 días'],['30','Últimos 30 días'],['mes','Este mes'],['mesant','Mes anterior'],['todo','Todo']].map(x=>chip('anq','q',x[0],x[1],false)).join('')}</div>
@@ -483,7 +483,43 @@ function vAnalisis(){
   const extra=`${neg.length?`<div class="card"><b style="color:var(--bad)">⛔ Consumos negativos (${neg.length})</b>${neg.map(n=>`<div class="muted">${fechaLarga(n.f)} · ${esc(n.p?n.p.descripcion:'')} · ${q3(n.v)}</div>`).join('')}</div>`:''}
   <div class="card"><b>⚠️ Alertas de consumo por pax (${alertas.length})</b><div class="muted">Un día se desvía &gt;2× o &lt;0,45× de la mediana del propio artículo (≥ 1 €)</div>${alertas.slice(0,15).map(a=>`<div class="mv"><span class="grow">${fechaLarga(a.f)} · <b>${esc(a.p?a.p.descripcion:'')}</b></span><span class="muted">${q3(a.v)} vs ~${q3(a.esp)}</span><span class="tag ${a.eurd>0?'r':'w'}">${a.eurd>0?'+':''}${nf(a.eurd,1)} €</span></div>`).join('')||'<div class="muted">Sin alertas 👌</div>'}</div>
   <div class="card"><b>Mayor merma</b><table>${topM.map(o=>`<tr><td>${esc(o.p?o.p.descripcion:'')}</td><td>${q3(o.mer)} ${ulp(o.uni,o.mer)}</td><td><b>${eur(o.merE)}</b></td></tr>`).join('')||'<tr><td class="muted">Sin merma registrada</td></tr>'}</table></div>`;
-  return css+ctrl+kp+dia+fams+rkE+rkQ+art+dd+tabla+extra;
+  return css+ctrl+kp+dia+fams+rkE+rkQ+art+dd+tabla;
+}
+
+// ---------- ANÁLISIS DE CIERRE (alertas de calidad del dato) ----------
+function vControl(){
+  if(!S.an||!S.an.data){loadAnalisis().then(render).catch(e=>toast(e.message,true));return '<div class="card muted">Cargando…</div>';}
+  const an=S.an,A=analiza(an.data),data=an.data;
+  const chip=(act,attr,val,label)=>`<button class="chip" data-act="${act}" data-${attr}="${esc(val)}">${label}</button>`;
+  const ctrl=`<h3 style="margin:4px 4px 8px">Análisis de cierre</h3><div class="card"><div class="muted" style="margin-bottom:6px">Revisa si alguna cantidad se imputó mal o si el conteo no tiene sentido. Cada aviso tiene un botón para abrir ese día y corregirlo.</div><div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="an_d" value="${an.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="an_h" value="${an.hasta}"></div></div><div class="chips" style="margin-top:8px">${[['7','Últimos 7 días'],['30','Últimos 30 días'],['mes','Este mes'],['mesant','Mes anterior'],['todo','Todo']].map(x=>chip('anq','q',x[0],x[1])).join('')}</div><div style="margin-top:8px"><button class="btn sm" data-act="anload" style="width:100%">Ver periodo</button></div></div>`;
+  const css=`<style>.al{display:flex;gap:8px;align-items:flex-start;padding:8px 2px;border-bottom:1px solid var(--line)}.al .grow b{display:block}.sev{font-size:11px;border-radius:8px;padding:3px 7px;white-space:nowrap;color:#fff}.sev.h{background:#c0392b}.sev.m{background:#d98a1c}.sev.l{background:#6b7686}.acard summary{cursor:pointer;font-weight:700}.acard .muted{font-size:12px}</style>`;
+  if(!A.P.length)return css+ctrl+'<div class="card muted">No hay días con consumos en este periodo.</div>';
+  const P=A.P,desc=o=>esc(o&&o.p?o.p.descripcion:(o&&o.codigo)||'');
+  const btn=f=>`<button class="btn ghost sm" data-act="irdia" data-f="${f}">Ver día</button>`;
+  const G=[];
+  const neg=[];for(const d of P)for(const r of d.map.values())if(r.consumo<-1e-9)neg.push({f:d.fecha,r,eur:r.consumo*r.cu});
+  G.push({t:'⛔ Consumo negativo',h:'Aprovechado + merma es mayor que lo que se sacó. Casi seguro hay un error de conteo.',sev:'h',n:neg.length,rows:neg.sort((a,b)=>a.eur-b.eur).map(x=>({f:x.f,t:desc(x.r),d:`Sacado ${q3(x.r.sacado)} · aprovechado ${q3(x.r.A)} · merma ${q3(x.r.M)} ${ulp(x.r.p?x.r.p.unidad_conteo:'',x.r.sacado)}`,e:x.eur}))});
+  const dev=[];
+  for(const o of A.pc.values()){const arr=o.per.filter(x=>x.v>0);if(arr.length<3)continue;const pp=arr.map(x=>x.v/x.pax),med=median(pp);for(const x of arr){const ratio=(x.v/x.pax)/med,eurd=(x.v-med*x.pax)*x.cu;if((ratio>2||ratio<0.45)&&Math.abs(eurd)>=1)dev.push({f:x.f,t:esc(o.p?o.p.descripcion:o.codigo),d:`${q3(x.v)} ${ulp(o.uni,x.v)} vs ~${q3(med*x.pax)} esperados (${nf(ratio,1)}×)`,e:eurd});}}
+  G.push({t:'⚠️ Consumo por pax fuera de lo normal',h:'Un día se desvía más de 2× o menos de 0,45× de la mediana del propio artículo (impacto ≥ 1 €). Puede ser un olvido de reposición, un decimal mal puesto o un cambio real.',sev:'m',n:dev.length,rows:dev.sort((a,b)=>Math.abs(b.e)-Math.abs(a.e))});
+  const byA=new Map();for(const m of data.movs){if(m.anulado)continue;const k=m.codigo+'|'+m.tipo;(byA.get(k)||byA.set(k,[]).get(k)).push(m);}
+  const atip=[];
+  for(const [k,arr] of byA){if(arr.length<4)continue;const med=median(arr.map(m=>+m.cantidad));if(med<=0)continue;for(const m of arr){const q=+m.cantidad;if(q>4*med){const p=S.prods.get(m.codigo),c=(p?cu(p):0);const e=(q-med)*c;if(e>=2)atip.push({f:m.fecha,t:esc(p?p.descripcion:m.codigo),d:`${m.tipo==='expuesto'?'Expuesto':'Reposición'}: ${q3(q)} ${ulp(p?p.unidad_conteo:'',q)} (lo habitual ~${q3(med)})${m.usuario?' · '+esc(m.usuario):''}`,e});}}}
+  G.push({t:'🔢 Cantidad introducida muy alta',h:'Un movimiento supera 4× lo habitual de ese artículo (impacto ≥ 2 €).',sev:'m',n:atip.length,rows:atip.sort((a,b)=>b.e-a.e)});
+  const mer=[];for(const d of P)for(const r of d.map.values()){if(r.sacado>0&&r.M/r.sacado>0.2&&r.M*r.cu>=1)mer.push({f:d.fecha,t:desc(r),d:`Merma ${q3(r.M)} de ${q3(r.sacado)} sacados (${nf(r.M/r.sacado*100,0)} %)`,e:r.M*r.cu});}
+  G.push({t:'🗑️ Merma alta',h:'Más del 20 % de lo sacado se tiró (impacto ≥ 1 €).',sev:'l',n:mer.length,rows:mer.sort((a,b)=>b.e-a.e)});
+  const sc=[];for(const d of P)for(const r of d.map.values())if(r.sacado>0&&!(r.cu>0))sc.push({f:d.fecha,t:desc(r),d:`Sacado ${q3(r.sacado)} ${ulp(r.p?r.p.unidad_conteo:'',r.sacado)} con coste 0 €`,e:0});
+  G.push({t:'💶 Artículos sin precio',h:'Se usaron con coste 0 y el escandallo sale más bajo de lo real. Corrígelo en Catálogo.',sev:'h',n:sc.length,rows:sc});
+  const cps=P.map(x=>x.cpax),medc=median(cps),dd=[];
+  if(P.length>=4)for(const d of P){const r=d.cpax/medc;if(r>1.2||r<0.8)dd.push({f:d.fecha,t:fechaLarga(d.fecha),d:`${nf(d.cpax)} €/pax frente a ${nf(medc)} de mediana (${r>1?'+':''}${nf((r-1)*100,0)} %) · ${d.pax} PAX`,e:(d.cpax-medc)*d.pax});}
+  G.push({t:'📅 Días con coste por pax atípico',h:'Más de un 20 % por encima o por debajo de la mediana del periodo. Mira si el PAX está bien.',sev:'m',n:dd.length,rows:dd.sort((a,b)=>Math.abs(b.e)-Math.abs(a.e))});
+  const an2=data.movs.filter(m=>m.anulado).map(m=>{const p=S.prods.get(m.codigo);return{f:m.fecha,t:esc(p?p.descripcion:m.codigo),d:`${m.tipo==='expuesto'?'Expuesto':'Reposición'} ${q3(m.cantidad)} anulado${m.anulado_por?' por '+esc(m.anulado_por):''}`,e:(+m.cantidad)*(p?cu(p):0)};});
+  G.push({t:'↩️ Cantidades anuladas',h:'Correcciones hechas durante el servicio. Muchas en un mismo artículo indican confusión de unidad.',sev:'l',n:an2.length,rows:an2.sort((a,b)=>b.e-a.e)});
+  const alt=G.reduce((a,g)=>a+(g.sev==='h'?g.n:0),0),tot=G.reduce((a,g)=>a+g.n,0);
+  const resumen=`<div class="kpis"><div class="kpi"><b>${P.length}</b><span>Días revisados</span></div><div class="kpi"><b style="color:${alt?'#c0392b':'#1f8a5b'}">${alt}</b><span>Errores probables</span></div><div class="kpi"><b>${tot}</b><span>Avisos en total</span></div></div>`;
+  const sevL={h:'Probable error',m:'Revisar',l:'Informativo'};
+  const cards=G.map(g=>`<details class="card acard" ${g.n&&g.sev!=='l'?'open':''}><summary>${g.t} (${g.n}) <span class="sev ${g.sev}">${sevL[g.sev]}</span></summary><div class="muted" style="margin:4px 0">${g.h}</div>${g.rows.slice(0,25).map(x=>`<div class="al"><div class="grow"><b>${x.t}</b><span class="muted">${fechaLarga(x.f)} · ${x.d}</span></div>${x.e?`<span class="tag ${x.e>0?'r':'w'}">${x.e>0?'+':''}${nf(x.e,1)} €</span>`:''}${btn(x.f)}</div>`).join('')||'<div class="muted">Sin avisos 👌</div>'}${g.rows.length>25?`<div class="muted">Mostrando 25 de ${g.rows.length}.</div>`:''}</details>`).join('');
+  return css+ctrl+resumen+cards;
 }
 
 /* ---------- CATÁLOGO ---------- */
@@ -613,7 +649,7 @@ document.addEventListener('click',async e=>{
   try{
   if(a==='login'){const n=$('#lg_n').value,p=$('#lg_p').value;if(!n||!p)return toast('Nombre y PIN',true);try{S.user=await DB.login(n,p);if(!CLOUD)sessionStorage.setItem('kd_user',JSON.stringify(S.user));await afterLogin();}catch(er){toast(er.message,true);}}
   else if(a==='logout'){sessionStorage.removeItem('kd_user');location.reload();}
-  else if(a==='tab'){S.tab=b.dataset.t;if(S.tab==='analisis')S.an.data=null;render();window.scrollTo(0,0);}
+  else if(a==='tab'){S.tab=b.dataset.t;if(S.tab==='analisis'||S.tab==='control')S.an.data=null;render();window.scrollTo(0,0);}
   else if(a==='vista'){S.vista=b.dataset.v;render();}
   else if(a==='cat'){S.cat=b.dataset.c;render();}
   else if(a==='open')openItem(b.dataset.c);
@@ -644,6 +680,7 @@ document.addEventListener('click',async e=>{
     if(a==='ancmp'){S.an.cmp=b.dataset.c;if(S.an.cmp==='custom'&&!S.an.cdesde){const n=diffDays(S.an.desde,S.an.hasta)+1;S.an.chasta=addDays(S.an.desde,-1);S.an.cdesde=addDays(S.an.desde,-n);}}
     if(S.an.desde>S.an.hasta||(S.an.cmp==='custom'&&S.an.cdesde>S.an.chasta))return toast('Fechas no válidas',true);
     S.an.data=null;render();}
+  else if(a==='irdia'){S.fecha=b.dataset.f;S.cierreEdit={};S.tab='cierre';await loadDay();render();window.scrollTo(0,0);}
   else if(a==='anmet'){S.an.met=b.dataset.m;S.an.vw='tot';render(true);}
   else if(a==='anvw'){S.an.vw='fam';render(true);}
   else if(a==='anfam'){const f=b.dataset.f;S.an.fam=(!f||S.an.fam===f)?'Todas':f;render(true);}
