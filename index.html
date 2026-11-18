@@ -342,7 +342,7 @@ async function loadAnalisis(){
   S.an.data=await DB.getRango(S.an.desde,S.an.hasta);
 }
 function periodo(data){
-  const dias=data.dias.filter(d=>d.pax>0).sort((a,b)=>a.fecha.localeCompare(b.fecha));const out=[];
+  const dias=data.dias.filter(d=>d.pax>0&&(data.movs.some(m=>m.fecha===d.fecha&&!m.anulado))).sort((a,b)=>a.fecha.localeCompare(b.fecha));const out=[];
   for(const d of dias){
     const mv=data.movs.filter(m=>m.fecha===d.fecha),ci=data.cierres.filter(c=>c.fecha===d.fecha);
     const map=agg(mv,ci,S.prods);const t=totales(map);
