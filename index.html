@@ -167,7 +167,7 @@ const S={user:null,fecha:today(),prods:new Map(),day:{dia:null,movs:[],cierres:[
 const ROLES={admin:['captura','cierre','analisis','control','catalogo','exportar'],cocina:['captura','cierre'],chef:['captura','cierre','analisis','control'],lectura:['analisis','control'],ventas:['analisis']};
 const isClosed=()=>S.day.dia&&S.day.dia.estado==='cerrado';
 const isAdmin=()=>!!(S.user&&S.user.rol==='admin');
-const canWrite=()=>S.user&&['admin','cocina','chef'].includes(S.user.rol)&&!isClosed();
+const canWrite=()=>S.user&&['admin','cocina','chef'].includes(S.user.rol)&&(!isClosed()||isAdmin());
 const prodList=()=>[...S.prods.values()];
 
 /* ---------- cálculo ---------- */
