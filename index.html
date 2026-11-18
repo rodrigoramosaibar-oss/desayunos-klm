@@ -509,7 +509,8 @@ document.addEventListener('click',async e=>{
   else if(a==='closesheet'){closeSheet();render(true);}
   else if(a==='nuevo')openNuevo();
   else if(a==='savenuevo')saveNuevo();
-  else if(a==='pax'){const v=prompt('PAX del día (comensales de desayuno):',S.day.dia?.pax??'');if(v===null)return;const n=parseInt(v,10);if(!(n>0&&n<5000))return toast('PAX no válido',true);await DB.setPax(S.fecha,n);await loadDay(true);render(true);}
+  else if(a==='pax'){sheet('<h3>PAX del día</h3><div class="muted">Comensales de desayuno</div><label class="f">PAX</label><input class="in qtyin" id="paxin" inputmode="numeric" value="'+(S.day.dia&&S.day.dia.pax!=null?S.day.dia.pax:'')+'"><div class="row" style="margin-top:14px"><button class="btn ghost grow" data-act="closesheet">Cancelar</button><button class="btn grow" data-act="savepax">Guardar</button></div>');setTimeout(()=>{const i=$('#paxin');if(i)i.focus();},60);}
+  else if(a==='savepax'){const n=parseInt($('#paxin').value,10);if(!(n>0&&n<5000))return toast('PAX no válido',true);await DB.setPax(S.fecha,n);closeSheet();await loadDay(true);render(true);toast('PAX guardado');}
   else if(a==='arrastre'){const items=S.prev.cierres.filter(c=>c.reutiliza&&+c.aprovechamiento>0);for(const c of items){const m={id:nid(),fecha:S.fecha,codigo:c.codigo,tipo:'expuesto',cantidad:+c.aprovechamiento,origen:'arrastre',usuario:S.user.nombre,ts:new Date().toISOString(),anulado:false};await DB.addMov(m);S.day.movs.push(m);}S.vista='usados';render();toast(items.length+' sobrantes cargados como expuesto');}
   else if(a==='reut'){const c=b.dataset.c;S.cierreEdit[c]={...(S.cierreEdit[c]||{}),R:b.dataset.v};syncEdit(c);render(true);}
   else if(a==='todoconsumido'){confCierre(b.dataset.c,true);}
