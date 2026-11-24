@@ -232,26 +232,37 @@ function render(keepScroll){
 /* ---------- CAPTURA ---------- */
 function visibles(){
   const q=S.q.trim().toLowerCase();const used=agg(S.day.movs,S.day.cierres,S.prods);
-  let l=prodList().filter(p=>p.activo!==false);
-  if(q)l=l.filter(p=>(p.descripcion+' '+p.codigo+' '+(p.categoria||'')).toLowerCase().includes(q));
-  else if(S.vista==='usados')l=l.filter(p=>used.has(p.codigo)&&used.get(p.codigo).sacado>0);
-  else if(S.vista==='frecuentes'){const f=frecuentes();l=l.filter(p=>f.has(p.codigo));}
-  if(S.cat!=='Todas'&&!q)l=l.filter(p=>p.categoria===S.cat);
-  l.sort((a,b)=>a.descripcion.localeCompare(b.descripcion,'es'));
-  return{l,used};
+  const all=prodList(),gen=p=>p.activo===false;
+  const byName=(a,b)=>a.descripcion.localeCompare(b.descripcion,'es');
+  const usado=p=>used.has(p.codigo)&&used.get(p.codigo).sacado>0;
+  let l,otros=[];
+  if(q){ // buscando: primero el listado de desayunos y debajo el listado general de cocina
+    const m=p=>(p.descripcion+' '+p.codigo+' '+(p.categoria||'')).toLowerCase().includes(q);
+    l=all.filter(p=>!gen(p)&&m(p));otros=all.filter(p=>gen(p)&&m(p)).sort(byName);
+  }else{
+    if(S.vista==='general')l=all.filter(gen);
+    else if(S.vista==='usados')l=all.filter(usado); // incluye artículos de cocina general ya usados hoy
+    else if(S.vista==='frecuentes'){const f=frecuentes();l=all.filter(p=>f.has(p.codigo));}
+    else l=all.filter(p=>!gen(p));
+    if(S.cat!=='Todas')l=l.filter(p=>p.categoria===S.cat);
+  }
+  l.sort(byName);
+  return{l,otros,used};
 }
 function frecuentes(){const c=new Map();if(S.hist)for(const m of S.hist.movs){if(!m.anulado)c.set(m.codigo,(c.get(m.codigo)||new Set()).add(m.fecha));}const out=new Set();for(const[k,v]of c)if(v.size>=2)out.add(k);return out;}
 function vCaptura(){
-  const{l,used}=visibles();const cats=['Todas',...new Set(prodList().map(p=>p.categoria||'Otros'))].sort((a,b)=>a==='Todas'?-1:b==='Todas'?1:a.localeCompare(b,'es'));
+  const{l,otros,used}=visibles();const cats=['Todas',...new Set(prodList().filter(p=>(S.vista==='general')===(p.activo===false)).map(p=>p.categoria||'Otros'))].sort((a,b)=>a==='Todas'?-1:b==='Todas'?1:a.localeCompare(b,'es'));
   let ban='';
   const hasArr=S.day.movs.some(m=>m.origen==='arrastre'&&!m.anulado);
   if(canWrite()&&S.prev&&!hasArr){const n=S.prev.cierres.filter(c=>c.reutiliza&&+c.aprovechamiento>0);if(n.length)ban=`<div class="banner">🔁 Ayer (${fechaLarga(S.prev.fecha)}) quedaron <b>${n.length}</b> artículos para reutilizar. <button class="btn gold sm" data-act="arrastre" style="margin-left:6px">Cargar sobrantes de ayer</button></div>`;}
   if(S.day.dia==null||S.day.dia.pax==null)ban+=`<div class="banner">⚠️ Falta indicar los <b>PAX</b> del día (se necesitan para cerrar).</div>`;
   const q=S.q.trim();
-  return `${ban}${canWrite()?'<button class="btn gold sm" data-act="nuevo" style="width:100%;margin-bottom:8px">➕ Artículo nuevo (no está en el catálogo)</button>':''}<div class="seg" style="margin-bottom:8px">${[['usados','Usados hoy'],['frecuentes','Frecuentes'],['todos','Todos']].map(([k,t])=>`<button class="${S.vista===k?'on':''}" data-act="vista" data-v="${k}">${t}</button>`).join('')}</div>
+  const rowH=p=>{const r=used.get(p.codigo);return `<button class="item" data-act="open" data-c="${esc(p.codigo)}"><div class="n"><b>${esc(p.descripcion)}</b><span>${esc(p.categoria||'')} · ${eur(cu(p))}/${ul(p.unidad_conteo)}${p.activo===false?' · <b style="color:#4a5f87">COCINA GENERAL</b>':''}${p.nuevo?' · <b style="color:#c27a00">NUEVO</b>':''}</span></div>${r&&r.sacado>0?`<span class="tag g">${q3(r.sacado)} ${ulp(p.unidad_conteo,r.sacado)}</span>`:`<span class="tag">+</span>`}</button>`};
+  return `${ban}${canWrite()?'<button class="btn gold sm" data-act="nuevo" style="width:100%;margin-bottom:8px">➕ Artículo nuevo (no está en el catálogo)</button>':''}<div class="seg" style="margin-bottom:8px">${[['usados','Usados hoy'],['frecuentes','Frecuentes'],['todos','Desayunos'],['general','Cocina general']].map(([k,t])=>`<button class="${S.vista===k?'on':''}" data-act="vista" data-v="${k}">${t}</button>`).join('')}</div>
   <div class="chips">${cats.map(c=>`<button class="chip ${S.cat===c?'on':''}" data-act="cat" data-c="${esc(c)}">${esc(c)}</button>`).join('')}</div>
-  ${l.length?l.slice(0,300).map(p=>{const r=used.get(p.codigo);return `<button class="item" data-act="open" data-c="${esc(p.codigo)}"><div class="n"><b>${esc(p.descripcion)}</b><span>${esc(p.categoria||'')} · ${eur(cu(p))}/${ul(p.unidad_conteo)}${p.nuevo?' · <b style="color:#c27a00">NUEVO</b>':''}</span></div>${r&&r.sacado>0?`<span class="tag g">${q3(r.sacado)} ${ulp(p.unidad_conteo,r.sacado)}</span>`:`<span class="tag">+</span>`}</button>`}).join(''):`<div class="card muted">${S.vista==='usados'&&!q?'Aún no hay cantidades hoy. Busca un artículo arriba o cambia a «Todos».':'Sin resultados.'}</div>`}
+  ${l.length?l.slice(0,300).map(rowH).join(''):(otros.length?'':`<div class="card muted">${S.vista==='usados'&&!q?'Aún no hay cantidades hoy. Busca un artículo arriba o cambia a «Desayunos».':S.vista==='general'&&!q?'No hay artículos de cocina general.':'Sin resultados.'}</div>`)}
   ${l.length>300?'<div class="muted">Mostrando 300: afina la búsqueda.</div>':''}
+  ${otros.length?`<div class="muted" style="margin:10px 4px 6px"><b>Cocina general</b> · fuera del listado de desayunos (${otros.length})</div>${otros.slice(0,40).map(rowH).join('')}${otros.length>40?'<div class="muted">Mostrando 40: afina la búsqueda.</div>':''}`:''}
   ${canWrite()&&q?`<button class="item" data-act="nuevo" style="border-style:dashed"><div class="n"><b>➕ Crear artículo nuevo «${esc(q)}»</b><span>Si no está en el catálogo: nombre, unidad y coste</span></div></button>`:''}`;
 }
 
@@ -701,10 +712,10 @@ async function aplicarHist(){
   }catch(e){pg.innerHTML=`<b style="color:#c62828">Se detuvo tras ${ok} días: ${esc(e.message)}</b><br>Lo importado hasta ahí se mantiene; vuelve a pulsar importar y se saltarán los días ya cargados.`;document.querySelectorAll('.sheet [data-act]').forEach(x=>x.disabled=false);S.an.data=null;S.base=null;}
 }
 async function procesarExcel(file){
-  const X=await loadXLSX();const wb=X.read(await file.arrayBuffer(),{type:'array'});const ws=wb.Sheets[wb.SheetNames[0]];const rows=X.utils.sheet_to_json(ws,{defval:''});
+  const X=await loadXLSX();const wb=X.read(await file.arrayBuffer(),{type:'array'});const ws=wb.Sheets[wb.SheetNames.find(n=>n.trim().toLowerCase()==='catalogo')||wb.SheetNames[0]];const rows=X.utils.sheet_to_json(ws,{defval:''});
   const norm=s=>String(s).toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z]/g,'');
   const get=(r,...ks)=>{for(const k of Object.keys(r)){if(ks.includes(norm(k)))return r[k];}return '';};
-  const nuevos=[],cambios=[],iguales=[],errores=[];const seen=new Set();
+  const nuevos=[],cambios=[],iguales=[],errores=[];const seen=new Set();const hasRev=rows.length&&Object.keys(rows[0]).some(k=>['revisar','aviso'].includes(norm(k)));
   rows.forEach((r,i)=>{
     const desc=String(get(r,'descripcion','articulo','nombre','description')).trim();let cod=String(get(r,'codigo','partno','part','ref')).trim();
     const precio=parseNum(get(r,'preciocompra','precio','coste','price','supplierunitprice','sourceinvunitcost'));let factor=parseNum(get(r,'factor'));if(isNaN(factor))factor=1;
@@ -715,9 +726,9 @@ async function procesarExcel(file){
     if(!cod){const f=prodList().find(p=>p.descripcion.toUpperCase()===desc.toUpperCase());cod=f?f.codigo:'MAN-'+(Date.now()+i).toString(36).toUpperCase();}
     if(seen.has(cod))return errores.push(`Fila ${i+2}: código repetido en el fichero (${cod})`);seen.add(cod);
     const uc=String(get(r,'unidadconteo','unidad')).trim().toUpperCase(),act=get(r,'activo');
-    const row={codigo:cod,descripcion:(desc||S.prods.get(cod)?.descripcion||'').toUpperCase(),categoria:String(get(r,'categoria')).trim()||S.prods.get(cod)?.categoria||'Otros',unidad_compra:String(get(r,'unidadcompra','requom')).trim()||S.prods.get(cod)?.unidad_compra||'',precio_compra:precio,factor,unidad_conteo:uc||S.prods.get(cod)?.unidad_conteo||'UT',activo:act===''?(S.prods.get(cod)?.activo!==false):!(String(act)==='0'||String(act).toLowerCase()==='no'||act===false),revisar:String(get(r,'revisar','aviso')).trim()||(S.prods.get(cod)?.revisar||'')};
+    const row={codigo:cod,descripcion:(desc||S.prods.get(cod)?.descripcion||'').toUpperCase(),categoria:String(get(r,'categoria')).trim()||S.prods.get(cod)?.categoria||'Otros',unidad_compra:String(get(r,'unidadcompra','requom')).trim()||S.prods.get(cod)?.unidad_compra||'',precio_compra:precio,factor,unidad_conteo:uc||S.prods.get(cod)?.unidad_conteo||'UT',activo:act===''?(S.prods.get(cod)?.activo!==false):!(String(act)==='0'||String(act).toLowerCase()==='no'||act===false),revisar:hasRev?String(get(r,'revisar','aviso')).trim():(S.prods.get(cod)?.revisar||'')};
     const old=S.prods.get(cod);
-    if(!old)nuevos.push(row);else if(Math.abs(old.precio_compra-precio)>1e-9||old.factor!==factor||old.unidad_conteo!==row.unidad_conteo||old.descripcion!==row.descripcion||old.activo!==row.activo||(old.revisar||'')!==row.revisar)cambios.push({old,row});else iguales.push(row);
+    if(!old)nuevos.push(row);else if(Math.abs(old.precio_compra-precio)>1e-9||old.factor!==factor||old.unidad_conteo!==row.unidad_conteo||old.descripcion!==row.descripcion||old.activo!==row.activo||(old.revisar||'')!==row.revisar||(old.categoria||'')!==row.categoria||(old.unidad_compra||'')!==row.unidad_compra)cambios.push({old,row});else iguales.push(row);
   });
   const noEn=prodList().filter(p=>!seen.has(p.codigo)).length;
   const pc=cambios.filter(c=>Math.abs(cu(c.old)-c.row.precio_compra/c.row.factor)>1e-9);
@@ -794,7 +805,7 @@ document.addEventListener('click',async e=>{
   if(a==='cambiopin'){await savePin();} else if(a==='login'){const n=$('#lg_n').value,p=$('#lg_p').value;if(!n||!p)return toast('Nombre y PIN',true);try{S.user=await DB.login(n,p);if(!CLOUD)sessionStorage.setItem('kd_user',JSON.stringify(S.user));await afterLogin();}catch(er){toast(er.message,true);}}
   else if(a==='logout'){sessionStorage.removeItem('kd_user');location.reload();}
   else if(a==='tab'){S.tab=b.dataset.t;if(S.tab==='analisis'||S.tab==='control')S.an.data=null;render();window.scrollTo(0,0);}
-  else if(a==='vista'){S.vista=b.dataset.v;render();}
+  else if(a==='vista'){S.vista=b.dataset.v;S.cat='Todas';render();}
   else if(a==='cat'){S.cat=b.dataset.c;render();}
   else if(a==='open')openItem(b.dataset.c);
   else if(a==='tipo'){const sh=$('.sheet-bg');sh.dataset.tipo=b.dataset.t;sh.querySelectorAll('[data-act=tipo]').forEach(x=>x.classList.toggle('on',x===b));$('#qty').focus();}
