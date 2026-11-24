@@ -127,6 +127,7 @@ async function build(ctx){
   const nd=A.P.length,hasB=!!B&&B.P.length>0;
   const wb=new ExcelJS.Workbook();wb.creator='Escandallo Desayunos · Kimpton Los Monteros';wb.created=new Date();wb.title='Escandallo de desayunos '+meta.desde+' a '+meta.hasta;
   const sPanel=wb.addWorksheet('Panel',{properties:{tabColor:{argb:argb(C.navy)}},views:[{showGridLines:false}]});
+  const sEvo=(meta.evo&&meta.evo.length)?wb.addWorksheet('Evolución',{properties:{tabColor:{argb:argb(C.navy)}},views:[{showGridLines:false}]}):null;
   const sDia=wb.addWorksheet('Por día',{properties:{tabColor:{argb:argb(C.gold)}},views:[{showGridLines:false}]});
   const sFam=wb.addWorksheet('Familias',{properties:{tabColor:{argb:argb(C.gold)}},views:[{showGridLines:false}]});
   const sRk=wb.addWorksheet('Rankings',{properties:{tabColor:{argb:argb(C.gold)}},views:[{showGridLines:false}]});
@@ -135,6 +136,7 @@ async function build(ctx){
   const page=(ws,land=true)=>{ws.pageSetup={orientation:land?'landscape':'portrait',paperSize:9,fitToPage:true,fitToWidth:1,fitToHeight:0,margins:{left:.4,right:.4,top:.5,bottom:.6,header:.3,footer:.3}};
     ws.headerFooter.oddFooter='&L&8Escandallo de desayunos · Kimpton Los Monteros Marbella&C&8&A&R&8Página &P de &N';};
   [sPanel,sDia,sFam,sRk,sDet,sMov].forEach(w=>page(w));
+  if(sEvo){page(sEvo);sEvo.pageSetup.orientation='portrait';sEvo.pageSetup.fitToHeight=1;}
   if(nd<=16)sDia.pageSetup.fitToHeight=1;
 
   const famNames=A.fams.filter(f=>f.eur>0||f.merE>0).map(f=>f.cat);
@@ -411,6 +413,51 @@ async function build(ctx){
     nt.font={name:FONT,size:9.5,italic:true,color:{argb:argb(C.mut)}};nt.alignment={wrapText:true,vertical:'top',indent:1};
     ws.getRow(r).height=24;ws.getRow(r+1).height=24;
     ws.pageSetup.printArea=`A1:Q${r+1}`;
+  }
+
+  /* ===== EVOLUCIÓN MENSUAL ===== */
+  if(sEvo){
+    const ws=sEvo,E=meta.evo,n=E.length,MES=['ene','feb','mar','abr','may','jun','jul','ago','sep','oct','nov','dic'],ML=m=>MES[+m.slice(5,7)-1]+' '+m.slice(2,4);
+    const widths=[2,28,9,12,15,12,15,16,13,14,12];widths.forEach((w,i)=>ws.getColumn(i+1).width=w);
+    banner(ws,1,2,11,'Evolución mensual',SUB,'Coste, PAX y coste por pax por mes  ·  cada mes usa su lista de precios  ·  hasta '+ddmmyyyy(meta.hasta)+'  ·  «Validado» = días validados por el jefe de cocina / días cerrados');ws.getRow(4).height=10;
+    headRow(ws,5,2,['Mes','Días','PAX','Coste consumo (€)','€ / pax','Δ € / pax vs mes ant.','€ / pax a precios actuales','Merma (€)','Merma % s/ bruto','Validado'],{left:[0],h:40});
+    const R0=6,RL=R0+n-1,RT=RL+1;
+    E.forEach((m,i)=>{const r=R0+i,row=ws.getRow(r);row.height=22;
+      const set=(c,v,o)=>{const x=row.getCell(c);x.value=v;bodyCell(x,o);};
+      set(2,ML(m.mes)+(m.parcial?' (parcial)':''),{al:'left',bold:true});set(3,m.dias,{nf:INT,al:'center'});set(4,m.pax,{nf:INT});set(5,m.cons,{nf:EUR});
+      set(6,{formula:`IF(D${r}=0,0,E${r}/D${r})`,result:m.pax?m.cons/m.pax:0},{nf:EUR,bold:true});
+      set(7,i?{formula:`IF(F${r-1}=0,0,F${r}/F${r-1}-1)`,result:(m.pax&&E[i-1].pax&&E[i-1].cons)?(m.cons/m.pax)/(E[i-1].cons/E[i-1].pax)-1:0}:null,{nf:'+0.0%;-0.0%;0.0%',al:'center'});
+      set(8,m.pax?m.consAct/m.pax:0,{nf:EUR});set(9,m.mer,{nf:EUR});set(10,m.bru?m.mer/m.bru:0,{nf:PCT});set(11,m.val+' / '+m.cerr,{al:'center'});});
+    const sum=k=>E.reduce((a,m)=>a+m[k],0),tp=sum('pax'),tc=sum('cons'),ta=sum('consAct'),tm=sum('mer'),tb=sum('bru');
+    const trow=ws.getRow(RT);trow.height=24;
+    for(let c=2;c<=11;c++)totalCell(trow.getCell(c),{al:c===2?'left':c===3||c===11?'center':'right'});
+    trow.getCell(2).value='Total periodo';trow.getCell(3).value={formula:`SUM(C${R0}:C${RL})`,result:sum('dias')};trow.getCell(4).value={formula:`SUM(D${R0}:D${RL})`,result:tp};trow.getCell(5).value={formula:`SUM(E${R0}:E${RL})`,result:tc};
+    trow.getCell(6).value={formula:`IF(D${RT}=0,0,E${RT}/D${RT})`,result:tp?tc/tp:0};trow.getCell(8).value=tp?ta/tp:0;trow.getCell(9).value={formula:`SUM(I${R0}:I${RL})`,result:tm};trow.getCell(10).value=tb?tm/tb:0;trow.getCell(11).value=sum('val')+' / '+sum('cerr');
+    trow.getCell(3).numFmt=INT;trow.getCell(4).numFmt=INT;trow.getCell(5).numFmt=EUR;trow.getCell(6).numFmt=EUR;trow.getCell(8).numFmt=EUR;trow.getCell(9).numFmt=EUR;trow.getCell(10).numFmt=PCT;
+    if(n>1){bar(ws,`E${R0}:E${RL}`,'A9BCDD');ws.addConditionalFormatting({ref:`F${R0}:F${RL}`,rules:[{type:'colorScale',priority:P(),cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFF2D4A8'}]}]});
+      ws.addConditionalFormatting({ref:`G${R0+1}:G${RL}`,rules:[{type:'expression',priority:P(),formulae:[`G${R0+1}>0.05`],style:{font:{color:{argb:argb(C.bad)},bold:true}}},{type:'expression',priority:P(),formulae:[`G${R0+1}<-0.05`],style:{font:{color:{argb:argb(C.ok)},bold:true}}}]});}
+    // gráficos
+    let r=RT+2;section(ws,r,2,11,'Evolución por mes');r++;
+    const pxw=w=>Math.round(w*7+5),totalW=widths.slice(1).reduce((a,w)=>a+pxw(w),0),CW=Math.floor((totalW-40)/2),CH=320,RH=20,rows=Math.ceil(CH/(RH*96/72))+1;
+    for(let i=0;i<rows;i++)ws.getRow(r+i).height=RH;
+    const labels=E.map(m=>ML(m.mes)),sublab=E.map(m=>m.dias+' días'+(m.parcial?' · parcial':''));
+    const colAt=x=>{let acc=0;for(let i=0;i<widths.length;i++){const w=pxw(widths[i]);if(acc+w>x)return i+(x-acc)/w;acc+=w;}return widths.length-1;};
+    const put=(png,x)=>{const id=wb.addImage({base64:png,extension:'png'});ws.addImage(id,{tl:{col:colAt(x),row:r-1+0.08},ext:{width:CW,height:CH},editAs:'oneCell'});};
+    const x0=pxw(widths[0]);
+    put(combo(ctx,{w:CW,h:CH,title:'Coste por pax por mes',sub:'Azul: precios de cada mes · Dorado: mismos consumos a precios actuales',labels,sublabels:sublab,bars:[{name:'€/pax real',color:C.navy,vals:E.map(m=>m.pax?m.cons/m.pax:0)},{name:'€/pax a precios actuales',color:C.gold,vals:E.map(m=>m.pax?m.consAct/m.pax:0)}],fmt:v=>nf(v,2)}),x0);
+    put(combo(ctx,{w:CW,h:CH,title:'PAX por mes',sub:'Comensales totales de desayuno por mes',labels,sublabels:sublab,bars:[{name:'PAX',color:C.teal,vals:E.map(m=>m.pax)}],fmt:v=>nf(v,0)}),x0+CW+24);
+    r+=rows+1;
+    // familias x mes (€/pax)
+    const cats=new Map();for(const m of E)for(const[k,v]of m.fam)cats.set(k,(cats.get(k)||0)+v);
+    const fams=[...cats.entries()].sort((a,b)=>b[1]-a[1]).map(x=>x[0]);
+    if(fams.length){section(ws,r,2,11,'€ por pax por familia y mes');r++;
+      const mcols=Math.min(n,10);const Es=E.slice(-mcols);
+      headRow(ws,r,2,['Familia',...Es.map(m=>ML(m.mes))],{left:[0],h:28});
+      fams.forEach((f,i)=>{const rr=r+1+i,row=ws.getRow(rr);row.height=20;const c0=row.getCell(2);c0.value=f;bodyCell(c0,{al:'left',bold:true});
+        Es.forEach((m,j)=>{const c=row.getCell(3+j);c.value=m.pax?(m.fam.get(f)||0)/m.pax:0;bodyCell(c,{nf:EUR});});});
+      ws.addConditionalFormatting({ref:`C${r+1}:${ws.getColumn(2+mcols).letter}${r+fams.length}`,rules:[{type:'colorScale',priority:P(),cfvo:[{type:'min'},{type:'max'}],color:[{argb:'FFFFFFFF'},{argb:'FFA9BCDD'}]}]});
+      r+=fams.length+2;}
+    ws.pageSetup.printArea=`A1:L${r}`;
   }
   const buf=await wb.xlsx.writeBuffer();
   return buf;
