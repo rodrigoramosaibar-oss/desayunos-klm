@@ -750,49 +750,49 @@ async function bajaXLS(){
 /* ---------- EXPORTAR ---------- */
 function vExportar(){
   if(!S.ex.desde){const d=new Date();d.setDate(d.getDate()-6);S.ex.desde=isoDate(d);S.ex.hasta=today();}
-  return `<div class="card"><b>Exportar a Excel</b><div class="muted">Hojas: <b>Resumen</b> (coste/pax por día, con fórmulas), <b>Detalle</b> (una fila por artículo y día, con fórmulas), <b>Movimientos</b> (registro completo, incluidas anulaciones).</div>
-  <div class="row"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="ex_d" value="${S.ex.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="ex_h" value="${S.ex.hasta}"></div></div>
-  <label class="f"><input type="checkbox" id="ex_c" checked> Solo días cerrados</label>
-  <button class="btn gold" style="width:100%;margin-top:12px" data-act="doexport">⬇️ Generar Excel</button></div>`;
+  const cmp=S.ex.cmp||'none',chip=(v,t)=>`<button class="chip ${cmp===v?'on':''}" data-act="excmp" data-c="${v}">${t}</button>`;
+  return `<div class="card"><b>Informe en Excel</b><div class="muted">Informe corporativo con <b>Panel</b> (tarjetas y gráficos), <b>Por día</b>, <b>Familias</b>, <b>Rankings</b> (top por valor, merma y cantidad), y los datos de origen en <b>Detalle</b> y <b>Movimientos</b> (con fórmulas). Muestra lo mismo que la pestaña Ventas.</div>
+  <div class="row" style="margin-top:8px"><div class="grow"><label class="f">Desde</label><input type="date" class="in" id="ex_d" value="${S.ex.desde}"></div><div class="grow"><label class="f">Hasta</label><input type="date" class="in" id="ex_h" value="${S.ex.hasta}"></div></div>
+  <label class="f"><input type="checkbox" id="ex_c" ${S.ex.soloC===false?'':'checked'}> Solo días cerrados</label>
+  <label class="f">Comparar con</label><div class="chips">${chip('none','Sin comparar')}${chip('prev','Periodo anterior')}${chip('custom','Otro periodo…')}</div>
+  ${cmp==='custom'?`<div class="row"><div class="grow"><label class="f">Comparar desde</label><input type="date" class="in" id="ex_cd" value="${S.ex.cdesde||''}"></div><div class="grow"><label class="f">Comparar hasta</label><input type="date" class="in" id="ex_ch" value="${S.ex.chasta||''}"></div></div>`:''}
+  <button class="btn gold" style="width:100%;margin-top:12px" data-act="doexport">⬇️ Generar informe Excel</button></div>`;
+}
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('No se pudo cargar el módulo del informe (¿sin conexión?)'));document.head.appendChild(s);});}
+async function loadReport(){
+  if(!window.ExcelJS)await loadScript('https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js');
+  if(!window.KDExport)await loadScript('export-excel.js?v=1');
+  return window.ExcelJS;
 }
 async function doExport(){
-  const desde=$('#ex_d').value,hasta=$('#ex_h').value,soloC=$('#ex_c').checked;S.ex.desde=desde;S.ex.hasta=hasta;
+  const desde=$('#ex_d').value,hasta=$('#ex_h').value,soloC=$('#ex_c').checked,cmp=S.ex.cmp||'none';S.ex.desde=desde;S.ex.hasta=hasta;S.ex.soloC=soloC;
+  if(!desde||!hasta||desde>hasta)return toast('Revisa las fechas',true);
   try{
-    const X=await loadXLSX();const data=await DB.getRango(desde,hasta);
-    let dias=data.dias.filter(d=>d.pax>0).sort((a,b)=>a.fecha.localeCompare(b.fecha));if(soloC)dias=dias.filter(d=>d.estado==='cerrado');
-    if(!dias.length)return toast('No hay días con PAX'+(soloC?' y cerrados':'')+' en ese rango',true);
-    const det=[['Fecha','Código','Artículo','Categoría','Unidad','Expuesto','Reposición','Aprovechamiento','Merma','Sacado','Consumo','Coste unidad (€)','Coste consumo (€)','Coste merma (€)','Coste bruto (€)','¿Reutiliza mañana?','Cerrado por']];
-    const sumD=new Map();let r=2;
-    for(const d of dias){
-      const map=agg(data.movs.filter(m=>m.fecha===d.fecha),data.cierres.filter(c=>c.fecha===d.fecha),S.prods);
-      const rows=[...map.values()].filter(x=>x.sacado>0||x.cierre).sort((a,b)=>(a.p?.descripcion||'').localeCompare(b.p?.descripcion||'','es'));
-      let c=0,m=0,b=0;
-      for(const x of rows){
-        const R=r++;
-        det.push([d.fecha,x.codigo,x.p?.descripcion||x.codigo,x.p?.categoria||'',x.p?.unidad_conteo||'',x.E,x.R,x.A,x.M,
-          {t:'n',f:`F${R}+G${R}`,v:x.sacado},{t:'n',f:`F${R}+G${R}-H${R}-I${R}`,v:x.consumo},x.cu,
-          {t:'n',f:`K${R}*L${R}`,v:x.consumo*x.cu},{t:'n',f:`I${R}*L${R}`,v:x.M*x.cu},{t:'n',f:`(F${R}+G${R}-H${R})*L${R}`,v:x.bruto*x.cu},x.reut?'Sí':(x.A>0?'No':''),d.cerrado_por||'']);
-        c+=x.consumo*x.cu;m+=x.M*x.cu;b+=x.bruto*x.cu;
-      }
-      sumD.set(d.fecha,{c,m,b});
+    toast('Generando informe…');
+    const EJ=await loadReport();const data=await DB.getRango(desde,hasta);
+    const flt=d=>soloC?d.estado==='cerrado':true;
+    const A=analiza({dias:data.dias.filter(flt),movs:data.movs,cierres:data.cierres},'cons');
+    if(!A.P.length)return toast('No hay días con PAX y consumos'+(soloC?' cerrados':'')+' en ese rango',true);
+    let B=null,cdesde=null,chasta=null;
+    if(cmp==='prev'){const n=diffDays(desde,hasta)+1;chasta=addDays(desde,-1);cdesde=addDays(desde,-n);}
+    else if(cmp==='custom'){cdesde=$('#ex_cd')?$('#ex_cd').value:S.ex.cdesde;chasta=$('#ex_ch')?$('#ex_ch').value:S.ex.chasta;S.ex.cdesde=cdesde;S.ex.chasta=chasta;if(!cdesde||!chasta||cdesde>chasta)return toast('Revisa las fechas de comparación',true);}
+    if(cdesde&&chasta){const c=await DB.getRango(cdesde,chasta);B=analiza({dias:c.dias.filter(flt),movs:c.movs,cierres:c.cierres},'cons');if(!B.P.length)B=null;}
+    const diaBy=new Map(data.dias.map(d=>[d.fecha,d]));
+    const det=[];
+    for(const d of A.P){
+      const rows=[...d.map.values()].filter(x=>x.sacado>0||x.cierre).sort((a,b)=>(a.p?.descripcion||'').localeCompare(b.p?.descripcion||'','es'));
+      for(const x of rows)det.push({fecha:d.fecha,codigo:x.codigo,desc:x.p?.descripcion||x.codigo,cat:x.p?.categoria||'',uni:x.p?.unidad_conteo||'',E:x.E,R:x.R,A:x.A,M:x.M,cu:x.cu,reut:x.reut?'Sí':(x.A>0?'No':''),cerrado:(diaBy.get(d.fecha)||{}).cerrado_por||''});
     }
-    const last=r-1;
-    const res=[['Fecha','PAX','Coste consumo (€)','Coste merma (€)','Coste bruto (€)','Coste/pax consumo (€)','Coste/pax bruto (€)','Merma % s/ bruto','Estado']];
-    dias.forEach((d,i)=>{const R=i+2,s=sumD.get(d.fecha);res.push([d.fecha,d.pax,{t:'n',f:`SUMIFS(Detalle!$M$2:$M$${last},Detalle!$A$2:$A$${last},A${R})`,v:s.c},{t:'n',f:`SUMIFS(Detalle!$N$2:$N$${last},Detalle!$A$2:$A$${last},A${R})`,v:s.m},{t:'n',f:`SUMIFS(Detalle!$O$2:$O$${last},Detalle!$A$2:$A$${last},A${R})`,v:s.b},{t:'n',f:`C${R}/B${R}`,v:s.c/d.pax},{t:'n',f:`E${R}/B${R}`,v:s.b/d.pax},{t:'n',f:`IF(E${R}=0,0,D${R}/E${R})`,v:s.b?s.m/s.b:0},d.estado]);});
-    const n=dias.length,L=n+1,T=n+2;const tc=[...sumD.values()].reduce((a,x)=>a+x.c,0),tm=[...sumD.values()].reduce((a,x)=>a+x.m,0),tb=[...sumD.values()].reduce((a,x)=>a+x.b,0),tp=dias.reduce((a,d)=>a+d.pax,0);
-    res.push(['TOTAL / PONDERADO',{t:'n',f:`SUM(B2:B${L})`,v:tp},{t:'n',f:`SUM(C2:C${L})`,v:tc},{t:'n',f:`SUM(D2:D${L})`,v:tm},{t:'n',f:`SUM(E2:E${L})`,v:tb},{t:'n',f:`C${T}/B${T}`,v:tc/tp},{t:'n',f:`E${T}/B${T}`,v:tb/tp},{t:'n',f:`IF(E${T}=0,0,D${T}/E${T})`,v:tb?tm/tb:0},'']);
-    const simple=dias.reduce((a,d)=>a+sumD.get(d.fecha).c/d.pax,0)/n;
-    res.push(['MEDIA SIMPLE (por día)','',"","","",{t:'n',f:`AVERAGE(F2:F${L})`,v:simple},{t:'n',f:`AVERAGE(G2:G${L})`,v:dias.reduce((a,d)=>a+sumD.get(d.fecha).b/d.pax,0)/n},'','']);
-    res.push([]);res.push(['Criterio: Consumo = Expuesto + Reposición − Aprovechamiento − Merma. Coste bruto = Expuesto + Reposición − Aprovechamiento (incluye el coste de la merma). Precio congelado al cerrar cada artículo.']);
-    const set=new Set(dias.map(d=>d.fecha));
-    const mov=[['Fecha','Hora','Código','Artículo','Tipo','Cantidad','Origen','Usuario','Anulado','Anulado por']];
-    data.movs.filter(m=>set.has(m.fecha)).sort((a,b)=>(a.ts||'').localeCompare(b.ts||'')).forEach(m=>mov.push([m.fecha,m.ts?new Date(m.ts).toLocaleTimeString('es-ES'):'',m.codigo,S.prods.get(m.codigo)?.descripcion||'',m.tipo,+m.cantidad,m.origen,m.usuario,m.anulado?'SÍ':'',m.anulado_por||'']));
-    const wb=X.utils.book_new();
-    const mk=(a,w)=>{const ws=X.utils.aoa_to_sheet(a);ws['!cols']=w.map(x=>({wch:x}));return ws;};
-    X.utils.book_append_sheet(wb,mk(res,[22,8,18,16,16,20,18,16,10]),'Resumen');
-    const wd=mk(det,[11,17,46,22,8,10,11,15,8,9,9,12,14,13,13,12,12]);wd['!autofilter']={ref:`A1:Q${last}`};wd['!freeze']={xSplit:0,ySplit:1};
-    X.utils.book_append_sheet(wb,wd,'Detalle');X.utils.book_append_sheet(wb,mk(mov,[11,9,17,44,11,9,10,14,8,12]),'Movimientos');
-    X.writeFile(wb,`Escandallo_desayunos_${dias[0].fecha}_${dias[n-1].fecha}.xlsx`);toast('Excel generado');
+    const set=new Set(A.P.map(d=>d.fecha));
+    const movs=data.movs.filter(m=>set.has(m.fecha)).sort((a,b)=>(a.ts||'').localeCompare(b.ts||'')).map(m=>({fecha:m.fecha,hora:m.ts?new Date(m.ts).toLocaleTimeString('es-ES'):'',codigo:m.codigo,desc:S.prods.get(m.codigo)?.descripcion||'',tipo:m.tipo,cant:+m.cantidad,origen:m.origen,usuario:m.usuario||'',anulado:!!m.anulado,anuladoPor:m.anulado_por||''}));
+    const meta={desde:A.P[0].fecha,hasta:A.P[A.P.length-1].fecha,soloCerrados:soloC,cdesde,chasta,usuario:S.user.nombre,generado:new Date().toLocaleString('es-ES',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})};
+    const makeCanvas=window.KD_CANVAS||((w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c;});
+    const buf=await window.KDExport.build({ExcelJS:EJ,makeCanvas,A,B,meta,det,movs});
+    const name=`Escandallo_desayunos_${A.P[0].fecha}_${A.P[A.P.length-1].fecha}.xlsx`;
+    if(window.KD_SAVE)return window.KD_SAVE(name,buf);
+    const blob=new Blob([buf],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+    const a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download=name;document.body.appendChild(a);a.click();setTimeout(()=>{URL.revokeObjectURL(a.href);a.remove();},3000);
+    toast('Informe generado');
   }catch(e){toast(e.message,true);}
 }
 
@@ -857,6 +857,7 @@ document.addEventListener('click',async e=>{
   else if(a==='savep')saveP(b.dataset.c);
   else if(a==='aplicarxl')aplicarXL();
   else if(a==='doexport')doExport();
+  else if(a==='excmp'){S.ex.cmp=b.dataset.c;const d=$('#ex_d'),h=$('#ex_h'),c=$('#ex_c');if(d){S.ex.desde=d.value;S.ex.hasta=h.value;S.ex.soloC=c.checked;}render();}
   }catch(er){toast(er.message||String(er),true);}
 });
 function syncEdit(c){const card=document.querySelector(`[data-cc="${CSS.escape(c)}"]`);if(!card)return;const ed=S.cierreEdit[c]||{};card.querySelectorAll('input[data-f]').forEach(i=>ed[i.dataset.f]=i.value);S.cierreEdit[c]=ed;}
